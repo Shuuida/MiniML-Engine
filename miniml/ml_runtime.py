@@ -1,0 +1,1439 @@
+"""
+MiniML Core for EduBot
+----------------------
+Runtime principal del framework.
+Incluye implementaciones de algoritmos ML desde cero (sin dependencias externas).
+
+Módulos incluidos:
+ - MiniMatrixOps: Álgebra lineal básica.
+ - Árboles: DecisionTree (Clasificación/Regresión), RandomForest.
+ - Modelos Lineales: MiniLinearModel, MiniSVM.
+ - Redes Neuronales: MiniNeuralNetwork (MLP).
+ - Preprocesamiento: MiniScaler.
+ - Lazy Learning: K-Nearest Neighbors (KNN).
+ - Utilidades: Métricas y exportación a C.
+
+MODIFICACIONES RECIENTES:
+- Integración de check_dims en todos los métodos fit/predict.
+- Almacenamiento de n_features_trained como metadata del modelo.
+"""
+
+from __future__ import annotations
+from typing import List, Any, Optional, Tuple, Union, Dict
+import random
+import math
+# Importamos utilidades de compatibilidad y validación
+from .ml_compat import safe_compare_le, _flatten_tree_to_arrays, check_dims
+
+# ---------------------------
+# MiniMatrixOps (sin numpy)
+# ---------------------------
+class MiniMatrixOps:
+    """Operaciones básicas de vectores/matrices sin dependencias externas."""
+
+    @staticmethod
+    def dot(a: List[float], b: List[float]) -> float:
+        if len(a) != len(b):
+            raise ValueError("Vectors must have same length for dot product")
+        s = 0.0
+        for i in range(len(a)):
+            s += a[i] * b[i]
+        return s
+
+    @staticmethod
+    def matvec(mat: List[List[float]], vec: List[float]) -> List[float]:
+        return [MiniMatrixOps.dot(row, vec) for row in mat]
+
+    @staticmethod
+    def transpose(mat: List[List[float]]) -> List[List[float]]:
+        if not mat:
+            return []
+        rows = len(mat)
+        cols = len(mat[0])
+        return [[mat[r][c] for r in range(rows)] for c in range(cols)]
+
+    @staticmethod
+    def outer(a: List[float], b: List[float]) -> List[List[float]]:
+        return [[ai * bj for bj in b] for ai in a]
+
+    @staticmethod
+    def add_vec(a: List[float], b: List[float]) -> List[float]:
+        if len(a) != len(b):
+            raise ValueError("Vector length mismatch")
+        return [a[i] + b[i] for i in range(len(a))]
+
+    @staticmethod
+    def scalar_mul_vec(s: float, v: List[float]) -> List[float]:
+        return [s * x for x in v]
+
+    @staticmethod
+    def matrix_multiply(A: List[List[float]], B: List[List[float]]) -> List[List[float]]:
+        """Multiplicación de matrices A (m x n) * B (n x p) -> (m x p)."""
+        if not A or not B:
+            return []
+        m = len(A)
+        n = len(A[0])
+        if any(len(row) != n for row in A):
+            raise ValueError("Invalid matrix A")
+        if any(len(row) != len(B[0]) for row in B):
+            pass 
+        p = len(B[0])
+        if any(len(row) != len(B[0]) for row in B):
+            raise ValueError("Invalid matrix B")
+        if len(B) != n:
+            raise ValueError("Incompatible dimensions for matrix multiply")
+        
+        BT = MiniMatrixOps.transpose(B)
+        result = []
+        for i in range(m):
+            row_res = []
+            for j in range(p):
+                row_res.append(MiniMatrixOps.dot(A[i], BT[j]))
+            result.append(row_res)
+        return result
+
+# ---------------------------
+# Utilities & Activations
+# ---------------------------
+
+def clip(value: float, min_val: float = -60.0, max_val: float = 60.0) -> float:
+    """Protege activaciones (sigmoid overflow)."""
+    if value < min_val:
+        return min_val
+    if value > max_val:
+        return max_val
+    return value
+
+def sigmoid(x: float) -> float:
+    x = clip(x)
+    try:
+        return 1.0 / (1.0 + math.exp(-x))
+    except OverflowError:
+        return 0.0 if x < 0 else 1.0
+    except Exception:
+        return 0.5 
+
+def sigmoid_derivative(output: float) -> float:
+    return output * (1.0 - output)
+
+def relu(x: float) -> float:
+    return x if x > 0 else 0.0
+
+def relu_derivative(x: float) -> float:
+    return 1.0 if x > 0 else 0.0
+
+def linear(x: float) -> float:
+    return x
+
+def linear_derivative(_: float) -> float:
+    return 1.0
+
+# ---------------------------
+# Decision tree helpers (CART)
+# ---------------------------
+def split_dataset(dataset: List[List[Any]], feature_index: int, value: Any) -> Tuple[List[List[Any]], List[List[Any]]]:
+    """Divide un conjunto de datos en dos grupos basándose en el valor de una característica."""
+    left, right = [], []
+    is_value_numeric = isinstance(value, (int, float))
+
+    for row in dataset:
+        try:
+            if feature_index >= len(row):
+                right.append(row)
+                continue
+
+            row_feature = row[feature_index]
+            is_row_feature_numeric = isinstance(row_feature, (int, float))
+
+            if is_value_numeric and is_row_feature_numeric:
+                if row_feature <= value:
+                    left.append(row)
+                else:
+                    right.append(row)
+            else:
+                right.append(row)
+        except Exception:
+            right.append(row)
+            
+    return left, right
+
+def gini_index(groups, classes) -> float:
+    n_instances = sum(len(g) for g in groups)
+    if n_instances == 0:
+        return 0.0
+    gini = 0.0
+    for group in groups:
+        size = len(group)
+        if size == 0:
+            continue
+        score = 0.0
+        for class_val in classes:
+            p = sum(1 for row in group if row[-1] == class_val) / size
+            score += p * p
+        gini += (1.0 - score) * (size / n_instances)
+    return gini
+
+def mse_index(groups) -> float:
+    n_instances = sum(len(g) for g in groups)
+    if n_instances == 0:
+        return 0.0
+    mse = 0.0
+    for group in groups:
+        size = len(group)
+        if size == 0:
+            continue
+        mean = sum(row[-1] for row in group) / size
+        sq_error = sum((row[-1] - mean) ** 2 for row in group)
+        mse += sq_error * (size / n_instances)
+    return mse
+
+def to_terminal_class(group: List[List[Any]]):
+    outcomes = {}
+    for row in group:
+        label = row[-1]
+        outcomes[label] = outcomes.get(label, 0) + 1
+    if not outcomes:
+        return 0
+    return max(outcomes.items(), key=lambda x: x[1])[0]
+
+def to_terminal_reg(group: List[List[Any]]):
+    if not group:
+        return 0.0
+    vals = [row[-1] for row in group]
+    return sum(vals) / len(vals)
+
+def get_split_class(dataset, n_features):
+    class_values = list(set(row[-1] for row in dataset))
+    b_index, b_value, b_score, b_groups = None, None, float('inf'), None
+    
+    if not dataset or not dataset[0]:
+        return {'index': b_index, 'value': b_value, 'groups': b_groups}
+        
+    features = list(range(len(dataset[0]) - 1))
+    if n_features is not None and n_features > 0:
+        features = random.sample(features, max(1, min(len(features), n_features)))
+        
+    for index in features:
+        values = set(row[index] for row in dataset)
+        numeric_values = {v for v in values if isinstance(v, (int, float))}
+        
+        for value in numeric_values:
+            groups = split_dataset(dataset, index, value)
+            gini = gini_index(groups, class_values)
+            
+            if gini < b_score:
+                b_index, b_value, b_score, b_groups = index, value, gini, groups
+                
+    return {'index': b_index, 'value': b_value, 'groups': b_groups}
+
+def get_split_regression(dataset, n_features):
+    b_index, b_value, b_score, b_groups = None, None, float('inf'), None
+
+    if not dataset or not dataset[0]:
+        return {'index': b_index, 'value': b_value, 'groups': b_groups}
+
+    features = list(range(len(dataset[0]) - 1))
+    if n_features is not None and n_features > 0:
+        features = random.sample(features, max(1, min(len(features), n_features)))
+
+    for index in features:
+        values = set(row[index] for row in dataset)
+        numeric_values = {v for v in values if isinstance(v, (int, float))}
+        
+        for value in numeric_values:
+            groups = split_dataset(dataset, index, value)
+            score = mse_index(groups)
+
+            if score < b_score:
+                b_index, b_value, b_score, b_groups = index, value, score, groups
+                
+    return {'index': b_index, 'value': b_value, 'groups': b_groups}
+
+def build_tree_class(node, max_depth, min_size, n_features):
+    groups = node.get('groups')
+    if not groups or not isinstance(groups, (list, tuple)) or len(groups) != 2:
+        node['left'] = to_terminal_class(node.get('groups') or [])
+        node['right'] = node['left']
+        node.pop('groups', None)
+        return
+    left, right = groups
+    if not left or not right or max_depth <= 0:
+        node['left'] = to_terminal_class(left)
+        node['right'] = to_terminal_class(right)
+        node.pop('groups', None)
+        return
+    left_child = get_split_class(left, n_features)
+    node['left'] = left_child
+    build_tree_class(left_child, max_depth - 1, min_size, n_features)
+    right_child = get_split_class(right, n_features)
+    node['right'] = right_child
+    build_tree_class(right_child, max_depth - 1, min_size, n_features)
+    node.pop('groups', None)
+
+def build_tree_reg(node, max_depth, min_size, n_features):
+    groups = node.get('groups')
+    if not groups or not isinstance(groups, (list, tuple)) or len(groups) != 2:
+        node['left'] = to_terminal_reg(node.get('groups') or [])
+        node['right'] = node['left']
+        node.pop('groups', None)
+        return
+    left, right = groups
+    if not left or not right or max_depth <= 0:
+        node['left'] = to_terminal_reg(left)
+        node['right'] = to_terminal_reg(right)
+        node.pop('groups', None)
+        return
+    left_child = get_split_regression(left, n_features)
+    node['left'] = left_child
+    build_tree_reg(left_child, max_depth - 1, min_size, n_features)
+    right_child = get_split_regression(right, n_features)
+    node['right'] = right_child
+    build_tree_reg(right_child, max_depth - 1, min_size, n_features)
+    node.pop('groups', None)
+
+# ---------------------------
+# Classifiers / Regressors
+# ---------------------------
+
+class DecisionTreeClassifier:
+    def __init__(self, max_depth: int = 10, min_size: int = 1, n_features: Optional[int] = None):
+        self.max_depth = max_depth
+        self.min_size = min_size
+        self.n_features = n_features
+        self.root: Optional[Dict[str, Any]] = None
+        self.n_features_trained: Optional[int] = None # Metadata dimensional
+
+    def fit(self, dataset: List[List[Any]]):
+        if not dataset or not isinstance(dataset, list):
+            raise ValueError("Dataset invalid for fit()")
+        
+        # Guardar dimensiones de entrenamiento (dataset = features + target)
+        self.n_features_trained = len(dataset[0]) - 1
+
+        root = get_split_class(dataset, self.n_features)
+        if not root.get('groups'):
+            self.root = {'index': None, 'value': None, 'left': to_terminal_class(dataset), 'right': to_terminal_class(dataset)}
+            return
+        build_tree_class(root, self.max_depth, self.min_size, self.n_features)
+        self.root = root
+
+    def _predict_row(self, node, row):
+        if not isinstance(node, dict):
+            return node
+
+        index = node.get('index')
+        value = node.get('value')
+
+        if index is None:
+            if 'left' in node and not isinstance(node['left'], dict):
+                return node['left']
+            return node
+
+        if isinstance(value, dict):
+            return self._predict_row(value, row)
+
+        try:
+            row_feature = row[index]
+            if not isinstance(row_feature, (int, float)):
+                return self._predict_row(node.get('right'), row)
+        except (IndexError, KeyError):
+            return self._predict_row(node.get('right'), row)
+
+        if safe_compare_le(row_feature, value):
+            return self._predict_row(node.get('left'), row)
+        else:
+            return self._predict_row(node.get('right'), row)
+
+    def predict(self, X: List[List[Any]]) -> List[Any]:
+        if self.root is None:
+            raise ValueError("Model not trained")
+        
+        # Validar dimensiones contra lo entrenado
+        if self.n_features_trained is not None:
+             check_dims(X, self.n_features_trained, "DecisionTree Predict")
+
+        preds = []
+        for row in X:
+            preds.append(self._predict_row(self.root, row))
+        return preds
+
+    def to_arduino_code(self, fn_name: str = "predict_row") -> str:
+        if self.root is None:
+            return "// Error: El modelo no está entrenado (root is None)."
+        
+        try:
+            flat_tree = _flatten_tree_to_arrays(self.root)
+        except Exception as e:
+            return f"// Error durante el aplanamiento del árbol: {e}"
+
+        def format_c_array(name, arr, dtype="int"):
+            if not arr:
+                return f"{dtype} {name}[1] = {{0}};"
+            values = ", ".join(map(str, arr))
+            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+
+        code = [
+            "// MiniML: Decision Tree Classifier (Iterative C Export)",
+            "// Exportación segura con uso de pila constante (O(1))",
+            format_c_array("tree_feature_index", flat_tree['feature_index'], "int"),
+            format_c_array("tree_threshold", flat_tree['threshold'], "float"),
+            format_c_array("tree_left_child", flat_tree['left_child'], "int"),
+            format_c_array("tree_right_child", flat_tree['right_child'], "int"),
+            format_c_array("tree_value", flat_tree['value'], "int") + " // Predicciones (clases)",
+            ""
+        ]
+        
+        func = [
+            f"int {fn_name}(float row[]) {{",
+            "  int node_index = 0;",
+            "  while (tree_feature_index[node_index] != -1) {",
+            "    if (row[tree_feature_index[node_index]] <= tree_threshold[node_index]) {",
+            "      node_index = tree_left_child[node_index];",
+            "    } else {",
+            "      node_index = tree_right_child[node_index];",
+            "    }",
+            "  }",
+            "  return tree_value[node_index];",
+            "}"
+        ]
+        code.extend(func)
+        return "\n".join(code)
+
+
+class DecisionTreeRegressor(DecisionTreeClassifier):
+    def fit(self, dataset: List[List[Any]]):
+        if not dataset or not isinstance(dataset, list):
+            raise ValueError("Dataset invalid for fit()")
+        
+        # Guardar dimensiones
+        self.n_features_trained = len(dataset[0]) - 1
+
+        root = get_split_regression(dataset, self.n_features)
+        if not root.get('groups'):
+            self.root = {'index': None, 'value': None, 'left': to_terminal_reg(dataset), 'right': to_terminal_reg(dataset)}
+            return
+        build_tree_reg(root, self.max_depth, self.min_size, self.n_features)
+        self.root = root
+
+    def predict(self, X: List[List[Any]]) -> List[float]:
+        if self.root is None:
+            raise ValueError("Model not trained")
+            
+        # Validar dimensiones
+        if self.n_features_trained is not None:
+             check_dims(X, self.n_features_trained, "DecisionTreeRegressor Predict")
+
+        preds = []
+        for row in X:
+            p = self._predict_row(self.root, row)
+            preds.append(float(p))
+        return preds
+
+    def to_arduino_code(self, fn_name: str = "predict_row") -> str:
+        if self.root is None:
+            return "// Error: El modelo no está entrenado (root is None)."
+        try:
+            flat_tree = _flatten_tree_to_arrays(self.root)
+        except Exception as e:
+            return f"// Error durante el aplanamiento del árbol: {e}"
+
+        def format_c_array(name, arr, dtype="int"):
+            if not arr:
+                return f"{dtype} {name}[1] = {{0}};"
+            values = ", ".join(map(str, arr))
+            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+
+        code = [
+            "// MiniML: Decision Tree Regressor (Iterative C Export)",
+            format_c_array("tree_feature_index", flat_tree['feature_index'], "int"),
+            format_c_array("tree_threshold", flat_tree['threshold'], "float"),
+            format_c_array("tree_left_child", flat_tree['left_child'], "int"),
+            format_c_array("tree_right_child", flat_tree['right_child'], "int"),
+            format_c_array("tree_value", flat_tree['value'], "float") + " // Predicciones",
+            ""
+        ]
+        
+        func = [
+            f"float {fn_name}(float row[]) {{",
+            "  int node_index = 0;",
+            "  while (tree_feature_index[node_index] != -1) {",
+            "    if (row[tree_feature_index[node_index]] <= tree_threshold[node_index]) {",
+            "      node_index = tree_left_child[node_index];",
+            "    } else {",
+            "      node_index = tree_right_child[node_index];",
+            "    }",
+            "  }",
+            "  return tree_value[node_index];",
+            "}"
+        ]
+        code.extend(func)
+        return "\n".join(code)
+
+# ---------------------------
+# Random Forest
+# ---------------------------
+class RandomForestClassifier:
+    def __init__(self, n_trees: int = 5, max_depth: int = 10, min_size: int = 1,
+                 sample_size: float = 1.0, n_features: Optional[int] = None, seed: Optional[int] = None):
+        self.n_trees = n_trees
+        self.max_depth = max_depth
+        self.min_size = min_size
+        self.sample_size = sample_size
+        self.n_features = n_features
+        self.seed = seed
+        self.trees: List[DecisionTreeClassifier] = []
+        self.n_features_trained: Optional[int] = None # Metadata
+
+    def _subsample(self, dataset):
+        n_sample = max(1, int(len(dataset) * self.sample_size))
+        return [random.choice(dataset) for _ in range(n_sample)]
+
+    def fit(self, dataset: List[List[Any]]):
+        if not dataset:
+            raise ValueError("Dataset empty")
+        
+        # Guardar dimensiones
+        self.n_features_trained = len(dataset[0]) - 1
+
+        self.trees = []
+        random.seed(self.seed)
+        for i in range(self.n_trees):
+            sample = self._subsample(dataset)
+            tree = DecisionTreeClassifier(max_depth=self.max_depth, min_size=self.min_size, n_features=self.n_features)
+            tree.fit(sample)
+            self.trees.append(tree)
+
+    def predict(self, X: List[List[Any]]) -> List[Any]:
+        if not self.trees:
+            raise ValueError("Not trained")
+        
+        # Validar dimensiones
+        if self.n_features_trained is not None:
+             check_dims(X, self.n_features_trained, "RandomForest Predict")
+
+        votes = []
+        for row in X:
+            row_votes = [t._predict_row(t.root, row) for t in self.trees]
+            agg = {}
+            for v in row_votes:
+                agg[v] = agg.get(v, 0) + 1
+            votes.append(max(agg.items(), key=lambda x: x[1])[0])
+        return votes
+
+    def to_arduino_code(self, fn_name: str = "predict_row") -> str:
+        if not self.trees:
+            return "// Error: El modelo no está entrenado (no hay árboles)."
+
+        def format_c_array(name, arr, dtype="int"):
+            if not arr:
+                return f"{dtype} {name}[1] = {{0}};"
+            values = ", ".join(map(str, arr))
+            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+
+        code = [
+            "// MiniML: Random Forest Classifier (Iterative C Export)",
+            f"// {self.n_trees} árboles, exportación segura con uso de pila constante (O(1))",
+            ""
+        ]
+
+        tree_fn_names = []
+        for i, tree in enumerate(self.trees):
+            if tree.root is None:
+                code.append(f"// Árbol {i} no está entrenado, se omite.")
+                continue
+            
+            try:
+                flat_tree = _flatten_tree_to_arrays(tree.root)
+            except Exception as e:
+                code.append(f"// Error aplanando árbol {i}: {e}")
+                continue
+
+            tree_name = f"tree{i}"
+            tree_fn_name = f"predict_{tree_name}"
+            tree_fn_names.append(tree_fn_name)
+
+            code.append(f"// --- Datos del Árbol {i} ---")
+            code.append(format_c_array(f"{tree_name}_feature_index", flat_tree['feature_index'], "int"))
+            code.append(format_c_array(f"{tree_name}_threshold", flat_tree['threshold'], "float"))
+            code.append(format_c_array(f"{tree_name}_left_child", flat_tree['left_child'], "int"))
+            code.append(format_c_array(f"{tree_name}_right_child", flat_tree['right_child'], "int"))
+            code.append(format_c_array(f"{tree_name}_value", flat_tree['value'], "int"))
+            code.append("")
+
+            func = [
+                f"int {tree_fn_name}(float row[]) {{",
+                "  int node_index = 0;",
+                f"  while ({tree_name}_feature_index[node_index] != -1) {{",
+                f"    if (row[{tree_name}_feature_index[node_index]] <= {tree_name}_threshold[node_index]) {{",
+                f"      node_index = {tree_name}_left_child[node_index];",
+                "    } else {",
+                f"      node_index = {tree_name}_right_child[node_index];",
+                "    }",
+                "  }",
+                f"  return {tree_name}_value[node_index];",
+                "}",
+                ""
+            ]
+            code.extend(func)
+
+        vote_helper = [
+            "// Función auxiliar de voto mayoritario",
+            f"int majority_vote(int votes[], int num_votes) {{",
+            "  if (num_votes == 0) return 0;",
+            "  int max_count = 0;",
+            "  int max_vote = votes[0];",
+            "  for (int i = 0; i < num_votes; i++) {",
+            "    int current_count = 0;",
+            "    for (int j = 0; j < num_votes; j++) {",
+            "      if (votes[j] == votes[i]) {",
+            "        current_count++;",
+            "      }",
+            "    }",
+            "    if (current_count > max_count) {",
+            "      max_count = current_count;",
+            "      max_vote = votes[i];",
+            "    }",
+            "  }",
+            "  return max_vote;",
+            "}",
+            ""
+        ]
+        code.extend(vote_helper)
+
+        main_func = [
+            f"int {fn_name}(float row[]) {{",
+            f"  int votes[{len(tree_fn_names)}];",
+        ]
+        for i, fn in enumerate(tree_fn_names):
+            main_func.append(f"  votes[{i}] = {fn}(row);")
+        
+        main_func.extend([
+            f"  return majority_vote(votes, {len(tree_fn_names)});",
+            "}"
+        ])
+        code.extend(main_func)
+        return "\n".join(code)
+
+
+class RandomForestRegressor(RandomForestClassifier):
+    def fit(self, dataset: List[List[Any]]):
+        if not dataset:
+            raise ValueError("Dataset empty")
+            
+        # Guardar dimensiones
+        self.n_features_trained = len(dataset[0]) - 1
+
+        self.trees = []
+        random.seed(self.seed)
+        for i in range(self.n_trees):
+            sample = self._subsample(dataset)
+            tree = DecisionTreeRegressor(max_depth=self.max_depth, min_size=self.min_size, n_features=self.n_features)
+            tree.fit(sample)
+            self.trees.append(tree)
+
+    def predict(self, X: List[List[Any]]) -> List[float]:
+        if not self.trees:
+            raise ValueError("Not trained")
+        
+        # Validar dimensiones
+        if self.n_features_trained is not None:
+             check_dims(X, self.n_features_trained, "RandomForestReg Predict")
+
+        preds = []
+        for row in X:
+            row_preds = [t._predict_row(t.root, row) for t in self.trees]
+            avg = sum(float(p) for p in row_preds) / len(row_preds)
+            preds.append(avg)
+        return preds
+
+    def to_arduino_code(self, fn_name: str = "predict_row") -> str:
+        if not self.trees:
+            return "// Error: El modelo no está entrenado (no hay árboles)."
+
+        def format_c_array(name, arr, dtype="int"):
+            if not arr:
+                return f"{dtype} {name}[1] = {{0}};"
+            values = ", ".join(map(str, arr))
+            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+
+        code = [
+            "// MiniML: Random Forest Regressor (Iterative C Export)",
+            f"// {self.n_trees} árboles, exportación segura con uso de pila constante (O(1))",
+            ""
+        ]
+
+        tree_fn_names = []
+        for i, tree in enumerate(self.trees):
+            if tree.root is None:
+                code.append(f"// Árbol {i} no está entrenado, se omite.")
+                continue
+            
+            try:
+                flat_tree = _flatten_tree_to_arrays(tree.root)
+            except Exception as e:
+                code.append(f"// Error aplanando árbol {i}: {e}")
+                continue
+
+            tree_name = f"tree{i}"
+            tree_fn_name = f"predict_{tree_name}"
+            tree_fn_names.append(tree_fn_name)
+
+            code.append(f"// --- Datos del Árbol {i} ---")
+            code.append(format_c_array(f"{tree_name}_feature_index", flat_tree['feature_index'], "int"))
+            code.append(format_c_array(f"{tree_name}_threshold", flat_tree['threshold'], "float"))
+            code.append(format_c_array(f"{tree_name}_left_child", flat_tree['left_child'], "int"))
+            code.append(format_c_array(f"{tree_name}_right_child", flat_tree['right_child'], "int"))
+            code.append(format_c_array(f"{tree_name}_value", flat_tree['value'], "float"))
+            code.append("")
+
+            func = [
+                f"float {tree_fn_name}(float row[]) {{",
+                "  int node_index = 0;",
+                f"  while ({tree_name}_feature_index[node_index] != -1) {{",
+                f"    if (row[{tree_name}_feature_index[node_index]] <= {tree_name}_threshold[node_index]) {{",
+                f"      node_index = {tree_name}_left_child[node_index];",
+                "    } else {",
+                f"      node_index = {tree_name}_right_child[node_index];",
+                "    }",
+                "  }",
+                f"  return {tree_name}_value[node_index];",
+                "}",
+                ""
+            ]
+            code.extend(func)
+
+        main_func = [
+            f"float {fn_name}(float row[]) {{",
+            f"  float predictions[{len(tree_fn_names)}];",
+            "  float sum = 0.0;",
+        ]
+        for i, fn in enumerate(tree_fn_names):
+            main_func.append(f"  predictions[{i}] = {fn}(row);")
+            main_func.append(f"  sum += predictions[{i}];")
+        
+        main_func.extend([
+            f"  return sum / {len(tree_fn_names)}.0;",
+            "}"
+        ])
+        code.extend(main_func)
+        return "\n".join(code)
+
+# ---------------------------
+# Mini Linear Model
+# ---------------------------
+class MiniLinearModel:
+    def __init__(self, learning_rate=0.01, epochs=1000):
+        self.learning_rate = float(learning_rate)
+        self.epochs = int(epochs)
+        self.weights = None
+        self.n_features_trained: Optional[int] = None # Metadata
+
+    def _unpack(self, dataset):
+        X = [row[:-1] for row in dataset]
+        y = [row[-1] for row in dataset]
+        return X, y
+
+    def fit(self, dataset):
+        X, y = self._unpack(dataset)
+        if not X:
+            raise ValueError("Empty dataset")
+        
+        # Guardar dimensiones
+        self.n_features_trained = len(X[0])
+
+        n_samples = len(X)
+        n_features = len(X[0])
+        self.weights = [0.0] * n_features + [0.0]
+        for epoch in range(self.epochs):
+            grads = [0.0] * (n_features + 1)
+            for xi, yi in zip(X, y):
+                pred = sum(w * xv for w, xv in zip(self.weights[:-1], xi)) + self.weights[-1]
+                err = pred - yi
+                for j in range(n_features):
+                    grads[j] += (2.0 / n_samples) * err * xi[j]
+                grads[-1] += (2.0 / n_samples) * err
+            for j in range(n_features + 1):
+                self.weights[j] -= self.learning_rate * grads[j]
+
+    def predict(self, X_list):
+        if self.weights is None:
+            raise ValueError("Model not trained")
+        
+        # Validar dimensiones
+        if self.n_features_trained is not None:
+             check_dims(X_list, self.n_features_trained, "MiniLinear Predict")
+
+        preds = []
+        for xi in X_list:
+            if not isinstance(xi, (list, tuple)):
+                xi = [xi]
+            pred = sum(w * xv for w, xv in zip(self.weights[:-1], xi)) + self.weights[-1]
+            preds.append(pred)
+        return preds
+
+    def to_arduino_code(self, fn_name="predict_row"):
+        w = self.weights or []
+        code = f"float weights[{len(w)}] = {{{', '.join(map(str, w))}}};\n"
+        code += f"float {fn_name}(float row[]) {{\n"
+        code += "  float s = 0.0;\n"
+        for i in range(len(w)-1):
+            code += f"  s += weights[{i}] * row[{i}];\n"
+        if len(w) > 0:
+            code += f"  s += weights[{len(w)-1}];\n"
+        code += "  return s;\n}\n"
+        return code
+
+# ---------------------------
+# Mini SVM (simple linear)
+# ---------------------------
+class MiniSVM:
+    def __init__(self, learning_rate=0.01, lambda_param=0.01, n_iters=1000):
+        self.learning_rate = float(learning_rate)
+        self.lambda_param = float(lambda_param)
+        self.n_iters = int(n_iters)
+        self.weights = None
+        self.n_features_trained: Optional[int] = None # Metadata
+
+    def fit(self, dataset):
+        X = [row[:-1] for row in dataset]
+        y = [row[-1] for row in dataset]
+        if not X:
+            raise ValueError("Empty dataset")
+        
+        # Guardar dimensiones
+        self.n_features_trained = len(X[0])
+        n_features = len(X[0])
+
+        self.weights = [0.0] * (n_features + 1)
+        for it in range(self.n_iters):
+            for xi, yi in zip(X, y):
+                if not isinstance(yi, (int, float)):
+                    raise ValueError("Labels must be numeric")
+                yi = 1 if yi > 0 else -1
+                wx = sum(w * xv for w, xv in zip(self.weights[:-1], xi)) + self.weights[-1]
+                if yi * wx < 1:
+                    for j in range(n_features):
+                        self.weights[j] = (1 - self.learning_rate * self.lambda_param) * self.weights[j] + self.learning_rate * yi * xi[j]
+                    self.weights[-1] = (1 - self.learning_rate * self.lambda_param) * self.weights[-1] + self.learning_rate * yi
+                else:
+                    for j in range(n_features + 1):
+                        self.weights[j] = (1 - self.learning_rate * self.lambda_param) * self.weights[j]
+
+    def predict(self, X_list):
+        if self.weights is None:
+            raise ValueError("Model not trained")
+        
+        # Validar dimensiones
+        if self.n_features_trained is not None:
+             check_dims(X_list, self.n_features_trained, "MiniSVM Predict")
+
+        out = []
+        for xi in X_list:
+            if not isinstance(xi, (list, tuple)):
+                xi = [xi]
+            s = sum(w * xv for w, xv in zip(self.weights[:-1], xi)) + self.weights[-1]
+            out.append(1 if s >= 0 else -1)
+        return out
+
+    def to_arduino_code(self, fn_name="predict_row"):
+        w = self.weights or []
+        code = f"// EduBot ML: MiniSVM (Linear) C Export\n"
+        code += f"float svm_weights[{len(w)}] = {{{', '.join(map(str, w))}}};\n"
+        code += f"int {fn_name}(float row[]) {{\n"
+        code += "  float s = 0.0;\n"
+        for i in range(len(w)-1):
+            code += f"  s += svm_weights[{i}] * row[{i}];\n"
+        if len(w) > 0:
+            code += f"  s += svm_weights[{len(w)-1}];\n"
+        code += "  return (s >= 0.0) ? 1 : -1;\n}\n"
+        return code
+
+# ---------------------------
+# MiniNeuralNetwork
+# ---------------------------
+class MiniNeuralNetwork:
+    def __init__(self, n_inputs, n_hidden, n_outputs, learning_rate=0.1, epochs=1000, seed=None):
+        self.n_inputs = int(n_inputs)
+        self.n_hidden = int(n_hidden)
+        self.n_outputs = int(n_outputs)
+        self.learning_rate = float(learning_rate)
+        self.epochs = int(epochs)
+        self.quantized = False
+        self.q_params = {}
+        self.hidden_activation = "sigmoid"
+        self.output_activation = "sigmoid"
+        
+        if seed is not None:
+            random.seed(seed)
+        
+        def rand_matrix(rows, cols):
+            return [[(random.random() - 0.5) * 0.2 for _ in range(cols)] for _ in range(rows)]
+        
+        self.W1 = rand_matrix(self.n_hidden, self.n_inputs)
+        self.B1 = [[0.0] for _ in range(self.n_hidden)]
+        self.W2 = rand_matrix(self.n_outputs, self.n_hidden)
+        self.B2 = [[0.0] for _ in range(self.n_outputs)]
+
+    def clip(self, value, min_val=-60.0, max_val=60.0):
+        return clip(value, min_val, max_val)
+    def sigmoid(self, x):
+        return sigmoid(x)
+    def sigmoid_deriv(self, out_val):
+        return sigmoid_derivative(out_val)
+    def relu(self, x):
+        return relu(x)
+    def relu_derivative(self, x):
+        return relu_derivative(x)
+
+    def _activate(self, x, act):
+        if act == 'sigmoid': return sigmoid(x)
+        if act == 'relu': return relu(x)
+        if act == 'linear': return linear(x)
+        return sigmoid(x)
+
+    def _act_derivative(self, out_val, act, pre_x=None):
+        if act == 'sigmoid': return sigmoid_derivative(out_val)
+        if act == 'relu': return relu_derivative(pre_x if pre_x is not None else out_val)
+        if act == 'linear': return linear_derivative(out_val)
+        return sigmoid_derivative(out_val)
+
+    def _forward(self, x_row):
+        z1, a1 = [], []
+        for i in range(self.n_hidden):
+            s = sum(self.W1[i][j] * x_row[j] for j in range(self.n_inputs)) + self.B1[i][0]
+            si = self._activate(s, getattr(self, "hidden_activation", "sigmoid"))
+            z1.append(s)
+            a1.append(si)
+
+        z2, a2 = [], []
+        for k in range(self.n_outputs):
+            s = sum(self.W2[k][i] * a1[i] for i in range(self.n_hidden)) + self.B2[k][0]
+            si = self._activate(s, getattr(self, "output_activation", "sigmoid"))
+            z2.append(s)
+            a2.append(si)
+
+        return a1, a2
+
+    def fit(self, dataset: List[List[Any]]):
+        """
+        Entrena la red neuronal. 
+        Ahora acepta un 'dataset' unificado [features + target] para compatibilidad con ml_manager.
+        """
+        if not dataset:
+            raise ValueError("Empty dataset")
+        
+        # Desempacar dataset (Standardization con el resto del framework)
+        X = [row[:-1] for row in dataset]
+        y = [row[-1] for row in dataset]
+
+        # Validar dimensiones
+        check_dims(X, self.n_inputs, "MiniNeuralNetwork Fit")
+        
+        # Formatear targets (manejo de escalares a listas)
+        y_formatted = []
+        for yi in y:
+            if isinstance(yi, (list, tuple)):
+                y_formatted.append([float(v) for v in yi])
+            else:
+                y_formatted.append([float(yi)])
+            
+        # Loop de entrenamiento
+        for epoch in range(self.epochs):
+            for xi, yi in zip(X, y_formatted):
+                a1, a2 = self._forward(xi)
+                
+                delta2 = [0.0] * self.n_outputs
+                for k in range(self.n_outputs):
+                    err = a2[k] - yi[k]
+                    delta2[k] = err * self._act_derivative(a2[k], self.output_activation)
+                
+                delta1 = [0.0] * self.n_hidden
+                for i in range(self.n_hidden):
+                    s = 0.0
+                    for k in range(self.n_outputs):
+                        s += self.W2[k][i] * delta2[k]
+                    delta1[i] = s * self._act_derivative(a1[i], self.hidden_activation)
+                
+                for k in range(self.n_outputs):
+                    for i in range(self.n_hidden):
+                        self.W2[k][i] -= self.learning_rate * delta2[k] * a1[i]
+                    self.B2[k][0] -= self.learning_rate * delta2[k]
+                
+                for i in range(self.n_hidden):
+                    for j in range(self.n_inputs):
+                        self.W1[i][j] -= self.learning_rate * delta1[i] * xi[j]
+                    self.B1[i][0] -= self.learning_rate * delta1[i]
+
+    def predict(self, X_list):
+        # Validar dimensiones
+        check_dims(X_list, self.n_inputs, "MiniNeuralNetwork Predict")
+
+        preds = []
+        for xi in X_list:
+            _, a2 = self._forward(xi)
+            if self.n_outputs == 1:
+                preds.append([a2[0]])
+            else:
+                preds.append(a2[:])
+        return preds
+
+    def quantize(self):
+        if self.quantized:
+            return
+        
+        def get_min_max(matrix):
+            flat = [val for row in matrix for val in row]
+            return min(flat), max(flat)
+
+        def quantize_matrix(matrix):
+            min_val, max_val = get_min_max(matrix)
+            limit = max(abs(min_val), abs(max_val))
+            scale = limit / 127.0 if limit != 0 else 1.0
+            
+            q_matrix = []
+            for row in matrix:
+                q_row = [int(val / scale) for val in row]
+                q_matrix.append(q_row)
+            return q_matrix, scale
+
+        self.q_W1, self.s_W1 = quantize_matrix(self.W1)
+        self.q_W2, self.s_W2 = quantize_matrix(self.W2)
+        
+        self.quantized = True
+        print("Model quantized (Weights converted to int8 representation).")
+
+    def to_arduino_code(self, fn_name="nn_predict"):
+        lines = [f"// Auto-generated NN ({self.n_inputs}->{self.n_hidden}->{self.n_outputs})"]
+        
+        if self.quantized:
+            lines.append("// MODO CUANTIZADO (int8 weights, float compute)")
+            def to_c_arr(matrix): return '{' + ', '.join('{' + ','.join(map(str, r)) + '}' for r in matrix) + '}'
+            
+            lines.append(f"const signed char W1_q[{len(self.W1)}][{len(self.W1[0])}] = {to_c_arr(self.q_W1)};")
+            lines.append(f"const float W1_scale = {self.s_W1};")
+            lines.append(f"const float b1[{len(self.B1)}] = {{{', '.join(str(b[0]) for b in self.B1)}}};")
+            
+            lines.append(f"const signed char W2_q[{len(self.W2)}][{len(self.W2[0])}] = {to_c_arr(self.q_W2)};")
+            lines.append(f"const float W2_scale = {self.s_W2};")
+            lines.append(f"const float b2[{len(self.B2)}] = {{{', '.join(str(b[0]) for b in self.B2)}}};")
+            
+            lines.append(f"void {fn_name}(float row[], float out[]) {{")
+            lines.append(f"  float a1[{self.n_hidden}];")
+            
+            lines.append(f"  for(int i=0; i<{self.n_hidden}; i++) {{")
+            lines.append("    float s = 0.0;")
+            lines.append(f"    for(int j=0; j<{self.n_inputs}; j++) {{")
+            lines.append("      s += (W1_q[i][j] * W1_scale) * row[j];")
+            lines.append("    }")
+            lines.append("    s += b1[i];")
+            if self.hidden_activation == 'sigmoid':
+                 lines.append("    if(s>60) a1[i]=1.0; else if(s<-60) a1[i]=0.0; else a1[i]=1.0/(1.0+exp(-s));")
+            elif self.hidden_activation == 'relu':
+                 lines.append("    a1[i] = s > 0 ? s : 0;")
+            else:
+                 lines.append("    a1[i] = s;")
+            lines.append("  }")
+            
+            lines.append(f"  float a2[{self.n_outputs}];")
+            lines.append(f"  for(int k=0; k<{self.n_outputs}; k++) {{")
+            lines.append("    float s = 0.0;")
+            lines.append(f"    for(int i=0; i<{self.n_hidden}; i++) {{")
+            lines.append("      s += (W2_q[k][i] * W2_scale) * a1[i];")
+            lines.append("    }")
+            lines.append("    s += b2[k];")
+            if self.output_activation == 'sigmoid':
+                 lines.append("    if(s>60) a2[k]=1.0; else if(s<-60) a2[k]=0.0; else a2[k]=1.0/(1.0+exp(-s));")
+            elif self.output_activation == 'relu':
+                 lines.append("    a2[k] = s > 0 ? s : 0;")
+            else:
+                 lines.append("    a2[k] = s;")
+            lines.append("    out[k] = a2[k];")
+            lines.append("  }")
+            lines.append("}")
+            
+        else:
+            rows1 = len(self.W1)
+            cols1 = len(self.W1[0]) if rows1 > 0 else 0
+            lines.append(f"float W1[{rows1}][{cols1}] = {{{', '.join('{{' + ','.join(map(str, r)) + '}}' for r in self.W1)}}};")
+            lines.append(f"float b1[{rows1}] = {{{', '.join(str(b[0]) for b in self.B1)}}};")
+            
+            rows2 = len(self.W2)
+            cols2 = len(self.W2[0]) if rows2 > 0 else 0
+            lines.append(f"float W2[{rows2}][{cols2}] = {{{', '.join('{{' + ','.join(map(str, r)) + '}}' for r in self.W2)}}};")
+            lines.append(f"float b2[{rows2}] = {{{', '.join(str(b[0]) for b in self.B2)}}};")
+
+            lines.append(f"void {fn_name}(float row[], float out[]) {{")
+            
+            lines.append(f"  float a1[{rows1}];")
+            for i in range(rows1):
+                summ = " + ".join(f"W1[{i}][{j}]*row[{j}]" for j in range(cols1))
+                lines.append(f"  float s1_{i} = {summ} + b1[{i}];")
+                if self.hidden_activation == 'sigmoid':
+                    lines.append(f"  if (s1_{i} > 60) a1[{i}] = 1.0; else if (s1_{i} < -60) a1[{i}] = 0.0; else a1[{i}] = 1.0/(1.0+exp(-s1_{i}));")
+                elif self.hidden_activation == 'relu':
+                    lines.append(f"  a1[{i}] = s1_{i} > 0 ? s1_{i} : 0.0;")
+                else:
+                    lines.append(f"  a1[{i}] = s1_{i};")
+            
+            lines.append(f"  float a2[{rows2}];")
+            for k in range(rows2):
+                summ = " + ".join(f"W2[{k}][{j}]*a1[{j}]" for j in range(cols2))
+                lines.append(f"  float s2_{k} = {summ} + b2[{k}];")
+                if self.output_activation == 'sigmoid':
+                    lines.append(f"  if (s2_{k} > 60) a2[{k}] = 1.0; else if (s2_{k} < -60) a2[{k}] = 0.0; else a2[{k}] = 1.0/(1.0+exp(-s2_{k}));")
+                elif self.output_activation == 'relu':
+                    lines.append(f"  a2[{k}] = s2_{k} > 0 ? s2_{k} : 0.0;")
+                else:
+                    lines.append(f"  a2[{k}] = s2_{k};")
+            
+            for i in range(rows2):
+                lines.append(f"  out[{i}] = a2[{i}];")
+            lines.append("}")
+        
+        return "\n".join(lines)
+
+# ---------------------------
+# Preprocessing
+# ---------------------------
+class MiniScaler:
+    """
+    Escalador para normalizar datos (MinMax o Standard).
+    Crucial para KNN, SVM y Redes Neuronales.
+    """
+    def __init__(self, method='minmax', feature_range=(0, 1)):
+        self.method = method
+        self.feature_range = feature_range
+        self.params = [] 
+        self.n_features_trained: Optional[int] = None # Metadata
+
+    def fit(self, dataset: List[List[float]]):
+        if not dataset:
+            return
+        
+        # Guardar dimensiones
+        self.n_features_trained = len(dataset[0])
+        n_features = len(dataset[0])
+        
+        self.params = []
+        
+        cols = [[row[i] for row in dataset] for i in range(n_features)]
+        
+        for col in cols:
+            stats = {}
+            if self.method == 'minmax':
+                stats['min'] = min(col)
+                stats['max'] = max(col)
+                stats['denom'] = stats['max'] - stats['min']
+                if stats['denom'] == 0: stats['denom'] = 1.0
+            elif self.method == 'standard':
+                mean = sum(col) / len(col)
+                variance = sum((x - mean) ** 2 for x in col) / len(col)
+                stats['mean'] = mean
+                stats['std'] = math.sqrt(variance)
+                if stats['std'] == 0: stats['std'] = 1.0
+            self.params.append(stats)
+
+    def transform(self, row: List[float]) -> List[float]:
+        if not self.params:
+            return row
+            
+        # Validación de dimensiones si está disponible
+        if isinstance(row, list) and self.n_features_trained:
+             if len(row) != self.n_features_trained:
+                 raise ValueError(f"Dimensión incorrecta. Esperado {self.n_features_trained}, recibido {len(row)}")
+
+        new_row = []
+        for i, val in enumerate(row):
+            if i >= len(self.params): 
+                new_row.append(val)
+                continue
+            
+            p = self.params[i]
+            if self.method == 'minmax':
+                norm = (val - p['min']) / p['denom']
+                scaled = norm * (self.feature_range[1] - self.feature_range[0]) + self.feature_range[0]
+                new_row.append(scaled)
+            elif self.method == 'standard':
+                scaled = (val - p['mean']) / p['std']
+                new_row.append(scaled)
+        return new_row
+
+    def to_arduino_code(self, fn_name="preprocess_row"):
+        if not self.params:
+            return "// Error: Scaler not fitted"
+        
+        n = len(self.params)
+        code = [f"// MiniML: Preprocessing ({self.method})"]
+        
+        if self.method == 'minmax':
+            mins = [p['min'] for p in self.params]
+            denoms = [p['denom'] for p in self.params]
+            code.append(f"float scaler_min[{n}] = {{{', '.join(map(str, mins))}}};")
+            code.append(f"float scaler_denom[{n}] = {{{', '.join(map(str, denoms))}}};")
+            code.append(f"void {fn_name}(float row[]) {{")
+            code.append(f"  for(int i=0; i<{n}; i++) {{")
+            code.append(f"    row[i] = (row[i] - scaler_min[i]) / scaler_denom[i];")
+            
+            if self.feature_range != (0, 1):
+                r_min, r_max = self.feature_range
+                scale = r_max - r_min
+                code.append(f"    row[i] = row[i] * {scale} + {r_min};")
+            code.append("  }")
+            code.append("}")
+            
+        elif self.method == 'standard':
+            means = [p['mean'] for p in self.params]
+            stds = [p['std'] for p in self.params]
+            code.append(f"float scaler_mean[{n}] = {{{', '.join(map(str, means))}}};")
+            code.append(f"float scaler_std[{n}] = {{{', '.join(map(str, stds))}}};")
+            code.append(f"void {fn_name}(float row[]) {{")
+            code.append(f"  for(int i=0; i<{n}; i++) {{")
+            code.append(f"    row[i] = (row[i] - scaler_mean[i]) / scaler_std[i];")
+            code.append("  }")
+            code.append("}")
+            
+        return "\n".join(code)
+
+# ---------------------------
+# K-Nearest Neighbors
+# ---------------------------
+class KNearestNeighbors:
+    def __init__(self, k=3, task='classification', **kwargs):
+        self.k = k
+        self.task = kwargs.get('task-type', task)
+        self.X_train = []
+        self.y_train = []
+        self.n_features_trained: Optional[int] = None # Metadata
+
+    def fit(self, dataset):
+        if not dataset:
+            raise ValueError("Empty dataset")
+        
+        # Guardar dimensiones
+        self.n_features_trained = len(dataset[0]) - 1
+
+        self.X_train = [row[:-1] for row in dataset]
+        self.y_train = [row[-1] for row in dataset]
+
+    def _euclidean_dist(self, row1, row2):
+        dist = 0.0
+        for i in range(len(row1)):
+            dist += (row1[i] - row2[i])**2
+        return math.sqrt(dist)
+
+    def predict(self, X_list):
+        if not self.X_train:
+            raise ValueError("Not trained")
+        
+        # Validar dimensiones
+        if self.n_features_trained is not None:
+             check_dims(X_list, self.n_features_trained, "KNN Predict")
+
+        preds = []
+        for row in X_list:
+            distances = []
+            for i, train_row in enumerate(self.X_train):
+                d = self._euclidean_dist(row, train_row)
+                distances.append((d, self.y_train[i]))
+            
+            distances.sort(key=lambda x: x[0])
+            neighbors = distances[:self.k]
+            
+            if self.task == 'regression':
+                val = sum(n[1] for n in neighbors) / self.k
+                preds.append(val)
+            else:
+                votes = {}
+                for _, label in neighbors:
+                    votes[label] = votes.get(label, 0) + 1
+                preds.append(max(votes.items(), key=lambda x: x[1])[0])
+        return preds
+
+    def to_arduino_code(self, fn_name="predict_knn"):
+        if not self.X_train:
+            return "// Error: Not trained"
+        
+        n_samples = len(self.X_train)
+        n_features = len(self.X_train[0])
+        
+        flat_X = []
+        for row in self.X_train:
+            flat_X.extend(row)
+        
+        code = [
+            "// MiniML: K-Nearest Neighbors (C Export)",
+            f"// K={self.k}, Samples={n_samples}, Features={n_features}",
+            "// ADVERTENCIA: Alto consumo de memoria Flash/RAM",
+            ""
+        ]
+        
+        code.append(f"const float knn_X[{n_samples * n_features}] = {{{', '.join(map(str, flat_X))}}};")
+        
+        dtype_y = "int" if self.task == 'classification' else "float"
+        code.append(f"const {dtype_y} knn_y[{n_samples}] = {{{', '.join(map(str, self.y_train))}}};")
+        
+        code.append("")
+        code.append(f"{dtype_y} {fn_name}(float row[]) {{")
+        code.append(f"  float distances[{n_samples}];")
+        code.append(f"  int indices[{n_samples}];")
+        
+        code.append("  // 1. Calcular distancias Euclidianas")
+        code.append(f"  for(int i=0; i<{n_samples}; i++) {{")
+        code.append("    float d = 0.0;")
+        code.append(f"    for(int j=0; j<{n_features}; j++) {{")
+        code.append(f"      float diff = row[j] - knn_X[i*{n_features} + j];")
+        code.append("      d += diff * diff;")
+        code.append("    }")
+        code.append("    distances[i] = sqrt(d);")
+        code.append("    indices[i] = i;")
+        code.append("  }")
+        
+        code.append("  // 2. Ordenar top K (Bubble sort parcial)")
+        code.append(f"  for(int i=0; i<{self.k}; i++) {{")
+        code.append(f"    for(int j=i+1; j<{n_samples}; j++) {{")
+        code.append("      if(distances[j] < distances[i]) {")
+        code.append("        float tmp_d = distances[i]; distances[i] = distances[j]; distances[j] = tmp_d;")
+        code.append("        int tmp_idx = indices[i]; indices[i] = indices[j]; indices[j] = tmp_idx;")
+        code.append("      }")
+        code.append("    }")
+        code.append("  }")
+        
+        if self.task == 'regression':
+            code.append("  // 3. Promedio")
+            code.append("  float sum = 0.0;")
+            code.append(f"  for(int i=0; i<{self.k}; i++) sum += knn_y[indices[i]];")
+            code.append(f"  return sum / {self.k}.0;")
+        else:
+            code.append("  // 3. Voto Mayoritario (Implementación simple)")
+            code.append(f"  {dtype_y} best_label = knn_y[indices[0]];")
+            code.append("  int max_count = 0;")
+            code.append(f"  for(int i=0; i<{self.k}; i++) {{")
+            code.append(f"    {dtype_y} current = knn_y[indices[i]];")
+            code.append("    int count = 0;")
+            code.append(f"    for(int j=0; j<{self.k}; j++) {{")
+            code.append("      if(knn_y[indices[j]] == current) count++;")
+            code.append("    }")
+            code.append("    if(count > max_count) { max_count = count; best_label = current; }")
+            code.append("  }")
+            code.append("  return best_label;")
+            
+        code.append("}")
+        return "\n".join(code)
+
+# ---------------------------
+# Evaluation metrics
+# ---------------------------
+def accuracy_score(y_true: List[Any], y_pred: List[Any]) -> float:
+    if not y_true:
+        return 0.0
+    return sum(1 for a, b in zip(y_true, y_pred) if a == b) / len(y_true)
+
+def mse(y_true: List[float], y_pred: List[float]) -> float:
+    n = len(y_true)
+    if n == 0:
+        return 0.0
+    return sum((a - b) ** 2 for a, b in zip(y_true, y_pred)) / n
+
+def mae(y_true: List[float], y_pred: List[float]) -> float:
+    n = len(y_true)
+    if n == 0:
+        return 0.0
+    return sum(abs(a - b) for a, b in zip(y_true, y_pred)) / n
+
+def r2_score(y_true: List[float], y_pred: List[float]) -> float:
+    mean_y = sum(y_true) / len(y_true) if y_true else 0.0
+    ss_tot = sum((yi - mean_y) ** 2 for yi in y_true)
+    ss_res = sum((yi - pi) ** 2 for yi, pi in zip(y_true, y_pred))
+    return 1.0 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+
+# ---------------------------
+# Metadata attach helper
+# ---------------------------
+def attach_metadata(model_obj, metadata: Dict[str, Any]):
+    try:
+        if not hasattr(model_obj, "metadata"):
+            model_obj.metadata = {}
+        model_obj.metadata.update(metadata)
+    except Exception:
+        pass
+
+# ---------------------------
+# Self-test (Comprehensive)
+# ---------------------------
+if __name__ == "__main__":
+    print("=== MiniML Runtime Self-Test ===")
+
+    try:
+        # 1. Decision Tree Classification
+        print("\n[TEST] Decision Tree Classifier...")
+        data_cls = [[2.7, 2.5, 0], [1.3, 3.5, 0], [3.5, 1.4, 1], [3.9, 4.0, 1]]
+        dt = DecisionTreeClassifier(max_depth=3)
+        dt.fit(data_cls)
+        pred_dt = dt.predict([[2.5, 2.3], [3.7, 3.9]])
+        print(f"  > Predicciones: {pred_dt}")
+        print(f"  > C-Code Preview: {dt.to_arduino_code()[:50]}...")
+
+        # 2. Random Forest Regression
+        print("\n[TEST] Random Forest Regressor...")
+        data_reg = [[1.0, 1.0, 2.0], [2.0, 2.0, 4.0], [3.0, 3.0, 6.0]]
+        rf = RandomForestRegressor(n_trees=3, max_depth=3)
+        rf.fit(data_reg)
+        pred_rf = rf.predict([[4.0, 4.0]])
+        print(f"  > Predicción (esperado ~8.0): {pred_rf}")
+
+        # 3. Mini Linear Model
+        print("\n[TEST] Mini Linear Model...")
+        # y = 2x + 1
+        data_lin = [[1.0, 3.0], [2.0, 5.0], [3.0, 7.0], [4.0, 9.0]]
+        lm = MiniLinearModel(learning_rate=0.01, epochs=2000)
+        lm.fit(data_lin)
+        pred_lm = lm.predict([[5.0]])
+        print(f"  > Predicción para 5.0 (esperado ~11.0): {pred_lm}")
+        print(f"  > Pesos: {lm.weights}")
+
+        # 4. Mini SVM
+        print("\n[TEST] Mini SVM...")
+        # Clases separables linealmente
+        data_svm = [[1.0, 1.0, 1], [2.0, 2.0, 1], [0.0, 0.0, -1], [-1.0, -1.0, -1]]
+        svm = MiniSVM(learning_rate=0.01, n_iters=1000)
+        svm.fit(data_svm)
+        pred_svm = svm.predict([[1.5, 1.5], [-0.5, -0.5]])
+        print(f"  > Predicciones (esperado [1, -1]): {pred_svm}")
+
+        # 5. Mini Neural Network (XOR problem)
+        print("\n[TEST] Mini Neural Network (XOR)...")
+        xor_data = [[0,0,0], [0,1,1], [1,0,1], [1,1,0]]
+        X_xor = [r[:-1] for r in xor_data]
+        y_xor = [r[-1] for r in xor_data]
+        nn = MiniNeuralNetwork(n_inputs=2, n_hidden=4, n_outputs=1, epochs=2000, learning_rate=0.1, seed=42)
+        nn.fit(X_xor, y_xor)
+        pred_nn = nn.predict([[0,1], [1,1]])
+        print(f"  > Predicciones (esperado ~1, ~0): {[round(p[0], 2) for p in pred_nn]}")
+        
+        # Test Quantization
+        nn.quantize()
+        print(f"  > Quantized C-Code Preview: {nn.to_arduino_code()[:60]}...")
+
+        # 6. Mini Scaler
+        print("\n[TEST] Mini Scaler (Standard)...")
+        raw_data = [[10.0, 200.0], [20.0, 400.0], [30.0, 600.0]]
+        scaler = MiniScaler(method='standard')
+        scaler.fit(raw_data)
+        transformed = scaler.transform([20.0, 400.0])
+        print(f"  > Transformado (debe estar cerca de 0.0): {transformed}")
+
+        # 7. Validation Logic (Check Dims)
+        print("\n[TEST] Validación de Dimensiones (check_dims)...")
+        try:
+            # Entrenado con 2 features, intentamos predecir con 3
+            lm.predict([[1.0, 2.0, 3.0]])
+            print("  > FALÓ: No detectó error de dimensiones.")
+        except ValueError as e:
+            print(f"  > ÉXITO: Detectó error correctamente: {e}")
+
+        print("\n=== Todos los tests de Runtime pasaron correctamente. ===")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"\n[ERROR] El test falló: {e}")

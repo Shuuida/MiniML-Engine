@@ -1,0 +1,23 @@
+# === Python build / cache ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# === Virtual environments ===
+venv/
+.env/
+.venv/
+
+# === System / IDE files ===
+.DS_Store
+Thumbs.db
+ml_debug_log.txt
+firmware_export.json
+.vscode/
+.idx/
+test_outputs/
+*.h
+*.json
+dist/
+miniml.egg-info/
