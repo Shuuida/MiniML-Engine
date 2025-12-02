@@ -30,6 +30,10 @@ faster-training = [
     "scipy"
     ]
 
+[project.urls]
+"Homepage" = "https://github.com/Shuuida/MiniML-Engine.git"
+"Bug Tracker" = "https://github.com/Shuuida/MiniML-Engine.git/issues"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["miniml*"]
