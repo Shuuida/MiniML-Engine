@@ -18,7 +18,7 @@
 
 * **🚫 Zero Dependencies:** No numpy, scipy, or pandas. Runs on any standard Python interpreter (including legacy systems).  
 * **⚡ Embedded Optimization:** Algorithms are reverse-engineered to run on hardware with \< 2KB RAM.  
-* **🔄 Dual-Core Engine:** Automatically accelerates training using scikit-learn if installed on the host PC, falling back to the pure Python ml\_runtime otherwise.
+* **🔄 Dual-Core Engine:** Automatically accelerates training using scikit-learn (OPTIONAL) if installed on the host PC, falling back to the pure Python ml\_runtime otherwise.
 
 ## **📂 Modular Architecture Analysis**
 
@@ -209,7 +209,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 * **🚫 Cero Dependencias:** No utiliza numpy, scipy o pandas. Se ejecuta en cualquier intérprete de Python estándar (incluyendo sistemas heredados/legacy).  
 * **⚡ Optimización Embebida:** Los algoritmos son diseñados a la inversa (*reverse-engineered*) para funcionar en hardware con **menos de 2KB de RAM**.  
-* **🔄 Motor de Doble Núcleo:** Acelera automáticamente el entrenamiento utilizando **scikit-learn** si está instalado en el PC anfitrión, volviendo al **ml\_runtime** de Python puro en caso contrario.
+* **🔄 Motor de Doble Núcleo:** Acelera automáticamente el entrenamiento utilizando **scikit-learn** (OPCIONAL) si está instalado en el PC anfitrión, volviendo al **ml\_runtime** de Python puro en caso contrario.
 
 ---
 
@@ -366,7 +366,7 @@ with open("model.h", "w") as f:
 
 ## **💾 Código C Generado (Artifacto)**
 
-La salida es código C99 estándar, listo para ser incluido en un sketch de Arduino ($\\text{\#include "model.h"}$).
+La salida es código C99 estándar, listo para ser incluido en un sketch de Arduino (\#include "model.h").
 
 C
 
