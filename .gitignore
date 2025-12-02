@@ -20,4 +20,4 @@ test_outputs/
 *.h
 *.json
 dist/
-miniml.egg-info/
+miniml_engine.egg-info/
