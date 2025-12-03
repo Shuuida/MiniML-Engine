@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "miniml-engine"
-version = "1.0.0"
+version = "1.0.1"
 description = "A lightweight, dependency-free Machine Learning framework for Embedded Systems"
 readme = "README.md"
 authors = [
