@@ -359,44 +359,43 @@ class DecisionTreeClassifier:
 
     def to_arduino_code(self, fn_name: str = "predict_row") -> str:
         if self.root is None:
-            return "// Error: El modelo no está entrenado (root is None)."
+            return "// Error: Modelo no entrenado."
         
-        try:
-            flat_tree = _flatten_tree_to_arrays(self.root)
-        except Exception as e:
-            return f"// Error durante el aplanamiento del árbol: {e}"
-
-        def format_c_array(name, arr, dtype="int"):
-            if not arr:
-                return f"{dtype} {name}[1] = {{0}};"
-            values = ", ".join(map(str, arr))
-            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+        flat = _flatten_tree_to_arrays(self.root)
+        n_nodes = len(flat['feature_index'])
+        
+        # Helper para PROGMEM (Flash Memory)
+        def progmem_arr(name, data, dtype):
+            vals = ", ".join(map(str, data))
+            return f"const {dtype} {name}[{len(data)}] PROGMEM = {{{vals}}};"
 
         code = [
-            "// MiniML: Decision Tree Classifier (Iterative C Export)",
-            "// Exportación segura con uso de pila constante (O(1))",
-            format_c_array("tree_feature_index", flat_tree['feature_index'], "int"),
-            format_c_array("tree_threshold", flat_tree['threshold'], "float"),
-            format_c_array("tree_left_child", flat_tree['left_child'], "int"),
-            format_c_array("tree_right_child", flat_tree['right_child'], "int"),
-            format_c_array("tree_value", flat_tree['value'], "int") + " // Predicciones (clases)",
-            ""
-        ]
-        
-        func = [
-            f"int {fn_name}(float row[]) {{",
-            "  int node_index = 0;",
-            "  while (tree_feature_index[node_index] != -1) {",
-            "    if (row[tree_feature_index[node_index]] <= tree_threshold[node_index]) {",
-            "      node_index = tree_left_child[node_index];",
+            f"// --- MiniML Decision Tree ({n_nodes} nodes) ---",
+            "// Optimized for AVR (Arduino): Uses PROGMEM to save SRAM.",
+            "#include <avr/pgmspace.h>",
+            "",
+            progmem_arr(f"{fn_name}_idx", flat['feature_index'], "int16_t"),
+            progmem_arr(f"{fn_name}_thr", flat['threshold'], "float"),
+            progmem_arr(f"{fn_name}_left", flat['left_child'], "int16_t"),
+            progmem_arr(f"{fn_name}_right", flat['right_child'], "int16_t"),
+            progmem_arr(f"{fn_name}_val", flat['value'], "int16_t"),
+            "",
+            f"int {fn_name}(float *row) {{",
+            "  int16_t n = 0;",
+            "  while (1) {",
+            f"    int16_t feat = (int16_t)pgm_read_word(&{fn_name}_idx[n]);",
+            "    if (feat == -1) {",
+            f"      return (int16_t)pgm_read_word(&{fn_name}_val[n]);",
+            "    }",
+            f"    float th = pgm_read_float(&{fn_name}_thr[n]);",
+            "    if (row[feat] <= th) {",
+            f"      n = (int16_t)pgm_read_word(&{fn_name}_left[n]);",
             "    } else {",
-            "      node_index = tree_right_child[node_index];",
+            f"      n = (int16_t)pgm_read_word(&{fn_name}_right[n]);",
             "    }",
             "  }",
-            "  return tree_value[node_index];",
             "}"
         ]
-        code.extend(func)
         return "\n".join(code)
 
 
@@ -430,43 +429,38 @@ class DecisionTreeRegressor(DecisionTreeClassifier):
         return preds
 
     def to_arduino_code(self, fn_name: str = "predict_row") -> str:
-        if self.root is None:
-            return "// Error: El modelo no está entrenado (root is None)."
-        try:
-            flat_tree = _flatten_tree_to_arrays(self.root)
-        except Exception as e:
-            return f"// Error durante el aplanamiento del árbol: {e}"
-
-        def format_c_array(name, arr, dtype="int"):
-            if not arr:
-                return f"{dtype} {name}[1] = {{0}};"
-            values = ", ".join(map(str, arr))
-            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+        if self.root is None: return "// Error"
+        flat = _flatten_tree_to_arrays(self.root)
+        
+        def progmem_arr(name, data, dtype):
+            vals = ", ".join(map(str, data))
+            return f"const {dtype} {name}[{len(data)}] PROGMEM = {{{vals}}};"
 
         code = [
-            "// MiniML: Decision Tree Regressor (Iterative C Export)",
-            format_c_array("tree_feature_index", flat_tree['feature_index'], "int"),
-            format_c_array("tree_threshold", flat_tree['threshold'], "float"),
-            format_c_array("tree_left_child", flat_tree['left_child'], "int"),
-            format_c_array("tree_right_child", flat_tree['right_child'], "int"),
-            format_c_array("tree_value", flat_tree['value'], "float") + " // Predicciones",
-            ""
-        ]
-        
-        func = [
-            f"float {fn_name}(float row[]) {{",
-            "  int node_index = 0;",
-            "  while (tree_feature_index[node_index] != -1) {",
-            "    if (row[tree_feature_index[node_index]] <= tree_threshold[node_index]) {",
-            "      node_index = tree_left_child[node_index];",
+            f"// --- MiniML Tree Regressor ---",
+            "#include <avr/pgmspace.h>",
+            progmem_arr(f"{fn_name}_idx", flat['feature_index'], "int16_t"),
+            progmem_arr(f"{fn_name}_thr", flat['threshold'], "float"),
+            progmem_arr(f"{fn_name}_left", flat['left_child'], "int16_t"),
+            progmem_arr(f"{fn_name}_right", flat['right_child'], "int16_t"),
+            progmem_arr(f"{fn_name}_val", flat['value'], "float"), # float value for regression
+            "",
+            f"float {fn_name}(float *row) {{",
+            "  int16_t n = 0;",
+            "  while (1) {",
+            f"    int16_t feat = (int16_t)pgm_read_word(&{fn_name}_idx[n]);",
+            "    if (feat == -1) {",
+            f"      return pgm_read_float(&{fn_name}_val[n]);",
+            "    }",
+            f"    float th = pgm_read_float(&{fn_name}_thr[n]);",
+            "    if (row[feat] <= th) {",
+            f"      n = (int16_t)pgm_read_word(&{fn_name}_left[n]);",
             "    } else {",
-            "      node_index = tree_right_child[node_index];",
+            f"      n = (int16_t)pgm_read_word(&{fn_name}_right[n]);",
             "    }",
             "  }",
-            "  return tree_value[node_index];",
             "}"
         ]
-        code.extend(func)
         return "\n".join(code)
 
 # ---------------------------
@@ -520,100 +514,84 @@ class RandomForestClassifier:
             votes.append(max(agg.items(), key=lambda x: x[1])[0])
         return votes
 
-    def to_arduino_code(self, fn_name: str = "predict_row") -> str:
-        if not self.trees:
-            return "// Error: El modelo no está entrenado (no hay árboles)."
-
-        def format_c_array(name, arr, dtype="int"):
-            if not arr:
-                return f"{dtype} {name}[1] = {{0}};"
-            values = ", ".join(map(str, arr))
-            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+    def to_arduino_code(self, fn_name: str = "predict_rf") -> str:
+        if not self.trees: return "// Error: Modelo no entrenado"
 
         code = [
-            "// MiniML: Random Forest Classifier (Iterative C Export)",
-            f"// {self.n_trees} árboles, exportación segura con uso de pila constante (O(1))",
+            "// --- MiniML Random Forest Classifier (Optimized AVR) ---",
+            "// All tree structures stored in PROGMEM to save SRAM.",
+            "#include <avr/pgmspace.h>",
             ""
         ]
 
-        tree_fn_names = []
+        # Helper para generar arrays PROGMEM
+        def progmem_arr(name, data, dtype):
+            if not data: return f"const {dtype} {name}[1] PROGMEM = {{0}};"
+            vals = ", ".join(map(str, data))
+            return f"const {dtype} {name}[{len(data)}] PROGMEM = {{{vals}}};"
+
+        tree_functions = []
+
         for i, tree in enumerate(self.trees):
-            if tree.root is None:
-                code.append(f"// Árbol {i} no está entrenado, se omite.")
-                continue
+            if tree.root is None: continue
             
-            try:
-                flat_tree = _flatten_tree_to_arrays(tree.root)
-            except Exception as e:
-                code.append(f"// Error aplanando árbol {i}: {e}")
-                continue
-
-            tree_name = f"tree{i}"
-            tree_fn_name = f"predict_{tree_name}"
-            tree_fn_names.append(tree_fn_name)
-
-            code.append(f"// --- Datos del Árbol {i} ---")
-            code.append(format_c_array(f"{tree_name}_feature_index", flat_tree['feature_index'], "int"))
-            code.append(format_c_array(f"{tree_name}_threshold", flat_tree['threshold'], "float"))
-            code.append(format_c_array(f"{tree_name}_left_child", flat_tree['left_child'], "int"))
-            code.append(format_c_array(f"{tree_name}_right_child", flat_tree['right_child'], "int"))
-            code.append(format_c_array(f"{tree_name}_value", flat_tree['value'], "int"))
-            code.append("")
-
-            func = [
-                f"int {tree_fn_name}(float row[]) {{",
-                "  int node_index = 0;",
-                f"  while ({tree_name}_feature_index[node_index] != -1) {{",
-                f"    if (row[{tree_name}_feature_index[node_index]] <= {tree_name}_threshold[node_index]) {{",
-                f"      node_index = {tree_name}_left_child[node_index];",
+            flat = _flatten_tree_to_arrays(tree.root)
+            prefix = f"{fn_name}_t{i}"
+            
+            # 1. Definir arrays globales en PROGMEM para este árbol
+            code.append(f"// Tree {i}")
+            code.append(progmem_arr(f"{prefix}_idx", flat['feature_index'], "int16_t"))
+            code.append(progmem_arr(f"{prefix}_thr", flat['threshold'], "float"))
+            code.append(progmem_arr(f"{prefix}_L", flat['left_child'], "int16_t"))
+            code.append(progmem_arr(f"{prefix}_R", flat['right_child'], "int16_t"))
+            code.append(progmem_arr(f"{prefix}_val", flat['value'], "int16_t"))
+            
+            # 2. Función de inferencia específica para este árbol
+            t_func_name = f"{prefix}_predict"
+            tree_functions.append(t_func_name)
+            
+            func_code = [
+                f"int16_t {t_func_name}(float *row) {{",
+                "  int16_t n = 0;",
+                "  while (1) {",
+                f"    int16_t feat = (int16_t)pgm_read_word(&{prefix}_idx[n]);",
+                "    if (feat == -1) {",
+                f"      return (int16_t)pgm_read_word(&{prefix}_val[n]);",
+                "    }",
+                f"    float th = pgm_read_float(&{prefix}_thr[n]);",
+                "    if (row[feat] <= th) {",
+                f"      n = (int16_t)pgm_read_word(&{prefix}_L[n]);",
                 "    } else {",
-                f"      node_index = {tree_name}_right_child[node_index];",
+                f"      n = (int16_t)pgm_read_word(&{prefix}_R[n]);",
                 "    }",
                 "  }",
-                f"  return {tree_name}_value[node_index];",
                 "}",
                 ""
             ]
-            code.extend(func)
+            code.extend(func_code)
 
-        vote_helper = [
-            "// Función auxiliar de voto mayoritario",
-            f"int majority_vote(int votes[], int num_votes) {{",
-            "  if (num_votes == 0) return 0;",
-            "  int max_count = 0;",
-            "  int max_vote = votes[0];",
-            "  for (int i = 0; i < num_votes; i++) {",
-            "    int current_count = 0;",
-            "    for (int j = 0; j < num_votes; j++) {",
-            "      if (votes[j] == votes[i]) {",
-            "        current_count++;",
-            "      }",
-            "    }",
-            "    if (current_count > max_count) {",
-            "      max_count = current_count;",
-            "      max_vote = votes[i];",
-            "    }",
-            "  }",
-            "  return max_vote;",
-            "}",
-            ""
-        ]
-        code.extend(vote_helper)
-
-        main_func = [
-            f"int {fn_name}(float row[]) {{",
-            f"  int votes[{len(tree_fn_names)}];",
-        ]
-        for i, fn in enumerate(tree_fn_names):
-            main_func.append(f"  votes[{i}] = {fn}(row);")
+        # 3. Función de votación
+        code.append("// Majority Voting Helper")
+        code.append(f"int {fn_name}(float *row) {{")
+        code.append(f"  int votes[{len(tree_functions)}];")
         
-        main_func.extend([
-            f"  return majority_vote(votes, {len(tree_fn_names)});",
-            "}"
-        ])
-        code.extend(main_func)
-        return "\n".join(code)
+        for i, t_func in enumerate(tree_functions):
+            code.append(f"  votes[{i}] = {t_func}(row);")
+            
+        code.append(f"  // Voting Logic (O(N^2) simple impl for small N)")
+        code.append(f"  int max_count = 0;")
+        code.append(f"  int best_vote = votes[0];")
+        code.append(f"  for (int i=0; i<{len(tree_functions)}; i++) {{")
+        code.append(f"    int c = 0;")
+        code.append(f"    for (int j=0; j<{len(tree_functions)}; j++) {{")
+        code.append(f"      if (votes[j] == votes[i]) c++;")
+        code.append(f"    }}")
+        code.append(f"    if (c > max_count) {{ max_count = c; best_vote = votes[i]; }}")
+        code.append(f"  }}")
+        code.append(f"  return best_vote;")
+        code.append("}")
 
+        return "\n".join(code)
 
 class RandomForestRegressor(RandomForestClassifier):
     def fit(self, dataset: List[List[Any]]):
@@ -646,76 +624,66 @@ class RandomForestRegressor(RandomForestClassifier):
             preds.append(avg)
         return preds
 
-    def to_arduino_code(self, fn_name: str = "predict_row") -> str:
-        if not self.trees:
-            return "// Error: El modelo no está entrenado (no hay árboles)."
-
-        def format_c_array(name, arr, dtype="int"):
-            if not arr:
-                return f"{dtype} {name}[1] = {{0}};"
-            values = ", ".join(map(str, arr))
-            return f"{dtype} {name}[{len(arr)}] = {{{values}}};"
+    def to_arduino_code(self, fn_name: str = "predict_rf_reg") -> str:
+        if not self.trees: return "// Error: Modelo no entrenado"
 
         code = [
-            "// MiniML: Random Forest Regressor (Iterative C Export)",
-            f"// {self.n_trees} árboles, exportación segura con uso de pila constante (O(1))",
+            "// --- MiniML RF Regressor (Optimized AVR) ---",
+            "#include <avr/pgmspace.h>",
             ""
         ]
 
-        tree_fn_names = []
+        def progmem_arr(name, data, dtype):
+            if not data: return f"const {dtype} {name}[1] PROGMEM = {{0}};"
+            vals = ", ".join(map(str, data))
+            return f"const {dtype} {name}[{len(data)}] PROGMEM = {{{vals}}};"
+
+        tree_functions = []
+
         for i, tree in enumerate(self.trees):
-            if tree.root is None:
-                code.append(f"// Árbol {i} no está entrenado, se omite.")
-                continue
+            if tree.root is None: continue
+            flat = _flatten_tree_to_arrays(tree.root)
+            prefix = f"{fn_name}_t{i}"
             
-            try:
-                flat_tree = _flatten_tree_to_arrays(tree.root)
-            except Exception as e:
-                code.append(f"// Error aplanando árbol {i}: {e}")
-                continue
-
-            tree_name = f"tree{i}"
-            tree_fn_name = f"predict_{tree_name}"
-            tree_fn_names.append(tree_fn_name)
-
-            code.append(f"// --- Datos del Árbol {i} ---")
-            code.append(format_c_array(f"{tree_name}_feature_index", flat_tree['feature_index'], "int"))
-            code.append(format_c_array(f"{tree_name}_threshold", flat_tree['threshold'], "float"))
-            code.append(format_c_array(f"{tree_name}_left_child", flat_tree['left_child'], "int"))
-            code.append(format_c_array(f"{tree_name}_right_child", flat_tree['right_child'], "int"))
-            code.append(format_c_array(f"{tree_name}_value", flat_tree['value'], "float"))
-            code.append("")
-
-            func = [
-                f"float {tree_fn_name}(float row[]) {{",
-                "  int node_index = 0;",
-                f"  while ({tree_name}_feature_index[node_index] != -1) {{",
-                f"    if (row[{tree_name}_feature_index[node_index]] <= {tree_name}_threshold[node_index]) {{",
-                f"      node_index = {tree_name}_left_child[node_index];",
+            code.append(f"// Tree {i}")
+            code.append(progmem_arr(f"{prefix}_idx", flat['feature_index'], "int16_t"))
+            code.append(progmem_arr(f"{prefix}_thr", flat['threshold'], "float"))
+            code.append(progmem_arr(f"{prefix}_L", flat['left_child'], "int16_t"))
+            code.append(progmem_arr(f"{prefix}_R", flat['right_child'], "int16_t"))
+            # Nota: para regresión, value es float
+            code.append(progmem_arr(f"{prefix}_val", flat['value'], "float"))
+            
+            t_func_name = f"{prefix}_predict"
+            tree_functions.append(t_func_name)
+            
+            func_code = [
+                f"float {t_func_name}(float *row) {{",
+                "  int16_t n = 0;",
+                "  while (1) {",
+                f"    int16_t feat = (int16_t)pgm_read_word(&{prefix}_idx[n]);",
+                "    if (feat == -1) {",
+                f"      return pgm_read_float(&{prefix}_val[n]);",
+                "    }",
+                f"    float th = pgm_read_float(&{prefix}_thr[n]);",
+                "    if (row[feat] <= th) {",
+                f"      n = (int16_t)pgm_read_word(&{prefix}_L[n]);",
                 "    } else {",
-                f"      node_index = {tree_name}_right_child[node_index];",
+                f"      n = (int16_t)pgm_read_word(&{prefix}_R[n]);",
                 "    }",
                 "  }",
-                f"  return {tree_name}_value[node_index];",
                 "}",
                 ""
             ]
-            code.extend(func)
+            code.extend(func_code)
 
-        main_func = [
-            f"float {fn_name}(float row[]) {{",
-            f"  float predictions[{len(tree_fn_names)}];",
-            "  float sum = 0.0;",
-        ]
-        for i, fn in enumerate(tree_fn_names):
-            main_func.append(f"  predictions[{i}] = {fn}(row);")
-            main_func.append(f"  sum += predictions[{i}];")
-        
-        main_func.extend([
-            f"  return sum / {len(tree_fn_names)}.0;",
-            "}"
-        ])
-        code.extend(main_func)
+        # Average logic
+        code.append(f"float {fn_name}(float *row) {{")
+        code.append(f"  float sum = 0.0;")
+        for t_func in tree_functions:
+            code.append(f"  sum += {t_func}(row);")
+        code.append(f"  return sum / {len(tree_functions)}.0;")
+        code.append("}")
+
         return "\n".join(code)
 
 # ---------------------------
@@ -771,17 +739,30 @@ class MiniLinearModel:
             preds.append(pred)
         return preds
 
-    def to_arduino_code(self, fn_name="predict_row"):
-        w = self.weights or []
-        code = f"float weights[{len(w)}] = {{{', '.join(map(str, w))}}};\n"
-        code += f"float {fn_name}(float row[]) {{\n"
-        code += "  float s = 0.0;\n"
-        for i in range(len(w)-1):
-            code += f"  s += weights[{i}] * row[{i}];\n"
-        if len(w) > 0:
-            code += f"  s += weights[{len(w)-1}];\n"
-        code += "  return s;\n}\n"
-        return code
+    def to_arduino_code(self, fn_name="predict_lin"):
+        if not self.weights: return "// Error: Modelo no entrenado"
+        w = self.weights
+        n_w = len(w)
+        
+        # PROGMEM: Guardamos los pesos en Flash
+        code = [
+            f"// --- MiniLinearModel Optimized (AVR) ---",
+            "#include <avr/pgmspace.h>",
+            f"const float {fn_name}_weights[{n_w}] PROGMEM = {{{', '.join(map(str, w))}}};",
+            "",
+            f"float {fn_name}(float *row) {{",
+            "  float s = 0.0;",
+            f"  // Producto punto leyendo desde Flash",
+            f"  for (int i = 0; i < {n_w - 1}; i++) {{",
+            f"    float w = pgm_read_float(&{fn_name}_weights[i]);",
+            "    s += w * row[i];",
+            "  }",
+            f"  // Bias (ultimo peso)",
+            f"  s += pgm_read_float(&{fn_name}_weights[{n_w - 1}]);",
+            "  return s;",
+            "}"
+        ]
+        return "\n".join(code)
 
 # ---------------------------
 # Mini SVM (simple linear)
@@ -835,18 +816,27 @@ class MiniSVM:
             out.append(1 if s >= 0 else -1)
         return out
 
-    def to_arduino_code(self, fn_name="predict_row"):
-        w = self.weights or []
-        code = f"// EduBot ML: MiniSVM (Linear) C Export\n"
-        code += f"float svm_weights[{len(w)}] = {{{', '.join(map(str, w))}}};\n"
-        code += f"int {fn_name}(float row[]) {{\n"
-        code += "  float s = 0.0;\n"
-        for i in range(len(w)-1):
-            code += f"  s += svm_weights[{i}] * row[{i}];\n"
-        if len(w) > 0:
-            code += f"  s += svm_weights[{len(w)-1}];\n"
-        code += "  return (s >= 0.0) ? 1 : -1;\n}\n"
-        return code
+    def to_arduino_code(self, fn_name="predict_svm"):
+        if not self.weights: return "// Error: Modelo no entrenado"
+        w = self.weights
+        n_w = len(w)
+
+        code = [
+            f"// --- MiniSVM Optimized (AVR) ---",
+            "#include <avr/pgmspace.h>",
+            f"const float {fn_name}_weights[{n_w}] PROGMEM = {{{', '.join(map(str, w))}}};",
+            "",
+            f"int {fn_name}(float *row) {{",
+            "  float s = 0.0;",
+            f"  for (int i = 0; i < {n_w - 1}; i++) {{",
+            f"    float w = pgm_read_float(&{fn_name}_weights[i]);",
+            "    s += w * row[i];",
+            "  }",
+            f"  s += pgm_read_float(&{fn_name}_weights[{n_w - 1}]);",
+            "  return (s >= 0.0) ? 1 : -1;",
+            "}"
+        ]
+        return "\n".join(code)
 
 # ---------------------------
 # MiniNeuralNetwork
@@ -978,118 +968,95 @@ class MiniNeuralNetwork:
         return preds
 
     def quantize(self):
-        if self.quantized:
-            return
+        """
+        Convierte pesos (float) a int8 (-128 a 127) para ahorrar espacio.
+        Calcula factores de escala para reconstruir el valor aproximado.
+        """
+        if self.quantized: return
         
-        def get_min_max(matrix):
-            flat = [val for row in matrix for val in row]
-            return min(flat), max(flat)
-
-        def quantize_matrix(matrix):
-            min_val, max_val = get_min_max(matrix)
-            limit = max(abs(min_val), abs(max_val))
-            scale = limit / 127.0 if limit != 0 else 1.0
+        def quantize_layer(weights):
+            # Encontrar rango global de la capa
+            flat = [w for row in weights for w in row]
+            min_w, max_w = min(flat), max(flat)
+            abs_max = max(abs(min_w), abs(max_w))
             
-            q_matrix = []
-            for row in matrix:
-                q_row = [int(val / scale) for val in row]
-                q_matrix.append(q_row)
-            return q_matrix, scale
+            # Escala: mapear abs_max a 127
+            scale = abs_max / 127.0 if abs_max != 0 else 1.0
+            
+            q_weights = []
+            for row in weights:
+                # Convertir a int8
+                q_row = [int(w / scale) for w in row]
+                q_weights.append(q_row)
+            return q_weights, scale
 
-        self.q_W1, self.s_W1 = quantize_matrix(self.W1)
-        self.q_W2, self.s_W2 = quantize_matrix(self.W2)
-        
+        self.q_W1, self.s_W1 = quantize_layer(self.W1)
+        self.q_W2, self.s_W2 = quantize_layer(self.W2)
         self.quantized = True
-        print("Model quantized (Weights converted to int8 representation).")
+        print(f"Quantization applied. Scale W1: {self.s_W1:.6f}, Scale W2: {self.s_W2:.6f}")
 
     def to_arduino_code(self, fn_name="nn_predict"):
-        lines = [f"// Auto-generated NN ({self.n_inputs}->{self.n_hidden}->{self.n_outputs})"]
-        
-        if self.quantized:
-            lines.append("// MODO CUANTIZADO (int8 weights, float compute)")
-            def to_c_arr(matrix): return '{' + ', '.join('{' + ','.join(map(str, r)) + '}' for r in matrix) + '}'
-            
-            lines.append(f"const signed char W1_q[{len(self.W1)}][{len(self.W1[0])}] = {to_c_arr(self.q_W1)};")
-            lines.append(f"const float W1_scale = {self.s_W1};")
-            lines.append(f"const float b1[{len(self.B1)}] = {{{', '.join(str(b[0]) for b in self.B1)}}};")
-            
-            lines.append(f"const signed char W2_q[{len(self.W2)}][{len(self.W2[0])}] = {to_c_arr(self.q_W2)};")
-            lines.append(f"const float W2_scale = {self.s_W2};")
-            lines.append(f"const float b2[{len(self.B2)}] = {{{', '.join(str(b[0]) for b in self.B2)}}};")
-            
-            lines.append(f"void {fn_name}(float row[], float out[]) {{")
-            lines.append(f"  float a1[{self.n_hidden}];")
-            
-            lines.append(f"  for(int i=0; i<{self.n_hidden}; i++) {{")
-            lines.append("    float s = 0.0;")
-            lines.append(f"    for(int j=0; j<{self.n_inputs}; j++) {{")
-            lines.append("      s += (W1_q[i][j] * W1_scale) * row[j];")
-            lines.append("    }")
-            lines.append("    s += b1[i];")
-            if self.hidden_activation == 'sigmoid':
-                 lines.append("    if(s>60) a1[i]=1.0; else if(s<-60) a1[i]=0.0; else a1[i]=1.0/(1.0+exp(-s));")
-            elif self.hidden_activation == 'relu':
-                 lines.append("    a1[i] = s > 0 ? s : 0;")
-            else:
-                 lines.append("    a1[i] = s;")
-            lines.append("  }")
-            
-            lines.append(f"  float a2[{self.n_outputs}];")
-            lines.append(f"  for(int k=0; k<{self.n_outputs}; k++) {{")
-            lines.append("    float s = 0.0;")
-            lines.append(f"    for(int i=0; i<{self.n_hidden}; i++) {{")
-            lines.append("      s += (W2_q[k][i] * W2_scale) * a1[i];")
-            lines.append("    }")
-            lines.append("    s += b2[k];")
-            if self.output_activation == 'sigmoid':
-                 lines.append("    if(s>60) a2[k]=1.0; else if(s<-60) a2[k]=0.0; else a2[k]=1.0/(1.0+exp(-s));")
-            elif self.output_activation == 'relu':
-                 lines.append("    a2[k] = s > 0 ? s : 0;")
-            else:
-                 lines.append("    a2[k] = s;")
-            lines.append("    out[k] = a2[k];")
-            lines.append("  }")
-            lines.append("}")
-            
-        else:
-            rows1 = len(self.W1)
-            cols1 = len(self.W1[0]) if rows1 > 0 else 0
-            lines.append(f"float W1[{rows1}][{cols1}] = {{{', '.join('{{' + ','.join(map(str, r)) + '}}' for r in self.W1)}}};")
-            lines.append(f"float b1[{rows1}] = {{{', '.join(str(b[0]) for b in self.B1)}}};")
-            
-            rows2 = len(self.W2)
-            cols2 = len(self.W2[0]) if rows2 > 0 else 0
-            lines.append(f"float W2[{rows2}][{cols2}] = {{{', '.join('{{' + ','.join(map(str, r)) + '}}' for r in self.W2)}}};")
-            lines.append(f"float b2[{rows2}] = {{{', '.join(str(b[0]) for b in self.B2)}}};")
+        # Asegurar cuantificación antes de exportar para 8-bits
+        if not self.quantized:
+            self.quantize()
 
-            lines.append(f"void {fn_name}(float row[], float out[]) {{")
-            
-            lines.append(f"  float a1[{rows1}];")
-            for i in range(rows1):
-                summ = " + ".join(f"W1[{i}][{j}]*row[{j}]" for j in range(cols1))
-                lines.append(f"  float s1_{i} = {summ} + b1[{i}];")
-                if self.hidden_activation == 'sigmoid':
-                    lines.append(f"  if (s1_{i} > 60) a1[{i}] = 1.0; else if (s1_{i} < -60) a1[{i}] = 0.0; else a1[{i}] = 1.0/(1.0+exp(-s1_{i}));")
-                elif self.hidden_activation == 'relu':
-                    lines.append(f"  a1[{i}] = s1_{i} > 0 ? s1_{i} : 0.0;")
-                else:
-                    lines.append(f"  a1[{i}] = s1_{i};")
-            
-            lines.append(f"  float a2[{rows2}];")
-            for k in range(rows2):
-                summ = " + ".join(f"W2[{k}][{j}]*a1[{j}]" for j in range(cols2))
-                lines.append(f"  float s2_{k} = {summ} + b2[{k}];")
-                if self.output_activation == 'sigmoid':
-                    lines.append(f"  if (s2_{k} > 60) a2[{k}] = 1.0; else if (s2_{k} < -60) a2[{k}] = 0.0; else a2[{k}] = 1.0/(1.0+exp(-s2_{k}));")
-                elif self.output_activation == 'relu':
-                    lines.append(f"  a2[{k}] = s2_{k} > 0 ? s2_{k} : 0.0;")
-                else:
-                    lines.append(f"  a2[{k}] = s2_{k};")
-            
-            for i in range(rows2):
-                lines.append(f"  out[{i}] = a2[{i}];")
-            lines.append("}")
+        lines = [
+            f"// --- MiniML MLP (Quantized int8) ---",
+            "// Weights in PROGMEM (Flash). Arithmetic in float for accuracy.",
+            "#include <avr/pgmspace.h>"
+        ]
         
+        # Helper C Array
+        def to_c(matrix): 
+            return '{' + ','.join('{' + ','.join(map(str, r)) + '}' for r in matrix) + '}'
+
+        # Exportar datos a PROGMEM
+        lines.append(f"const int8_t {fn_name}_W1[{self.n_hidden}][{self.n_inputs}] PROGMEM = {to_c(self.q_W1)};")
+        lines.append(f"const float {fn_name}_sW1 = {self.s_W1};")
+        lines.append(f"const float {fn_name}_B1[{self.n_hidden}] PROGMEM = {{{', '.join(map(str, [b[0] for b in self.B1]))}}};")
+        
+        lines.append(f"const int8_t {fn_name}_W2[{self.n_outputs}][{self.n_hidden}] PROGMEM = {to_c(self.q_W2)};")
+        lines.append(f"const float {fn_name}_sW2 = {self.s_W2};")
+        lines.append(f"const float {fn_name}_B2[{self.n_outputs}] PROGMEM = {{{', '.join(map(str, [b[0] for b in self.B2]))}}};")
+
+        # Función de inferencia
+        lines.append(f"void {fn_name}(float *row, float *out) {{")
+        lines.append(f"  float a1[{self.n_hidden}];")
+        
+        # Layer 1
+        lines.append(f"  for(int i=0; i<{self.n_hidden}; i++) {{")
+        lines.append("    float sum = 0.0;")
+        lines.append(f"    for(int j=0; j<{self.n_inputs}; j++) {{")
+        lines.append(f"      // Read int8 from Flash, convert to float via scale")
+        lines.append(f"      int8_t w = (int8_t)pgm_read_byte(&{fn_name}_W1[i][j]);")
+        lines.append(f"      sum += (w * {fn_name}_sW1) * row[j];")
+        lines.append("    }")
+        lines.append(f"    sum += pgm_read_float(&{fn_name}_B1[i]);")
+        
+        # Activación Oculta
+        if self.hidden_activation == 'relu':
+            lines.append("    a1[i] = (sum > 0) ? sum : 0;")
+        else: # Sigmoid (aprox rápida)
+            lines.append("    if(sum>10) a1[i]=1.0; else if(sum<-10) a1[i]=0.0; else a1[i]=1.0/(1.0+exp(-sum));")
+        lines.append("  }")
+
+        # Layer 2
+        lines.append(f"  for(int k=0; k<{self.n_outputs}; k++) {{")
+        lines.append("    float sum = 0.0;")
+        lines.append(f"    for(int i=0; i<{self.n_hidden}; i++) {{")
+        lines.append(f"      int8_t w = (int8_t)pgm_read_byte(&{fn_name}_W2[k][i]);")
+        lines.append(f"      sum += (w * {fn_name}_sW2) * a1[i];")
+        lines.append("    }")
+        lines.append(f"    sum += pgm_read_float(&{fn_name}_B2[k]);")
+        
+        # Activación Salida
+        if self.output_activation == 'relu':
+            lines.append("    out[k] = (sum > 0) ? sum : 0;")
+        else:
+             lines.append("    if(sum>10) out[k]=1.0; else if(sum<-10) out[k]=0.0; else out[k]=1.0/(1.0+exp(-sum));")
+        lines.append("  }")
+        lines.append("}")
+
         return "\n".join(lines)
 
 # ---------------------------
@@ -1159,39 +1126,47 @@ class MiniScaler:
         return new_row
 
     def to_arduino_code(self, fn_name="preprocess_row"):
-        if not self.params:
-            return "// Error: Scaler not fitted"
-        
+        if not self.params: return "// Error: Scaler not fitted"
         n = len(self.params)
-        code = [f"// MiniML: Preprocessing ({self.method})"]
+        
+        # Helper para arrays en Flash
+        def flash_arr(name, data):
+            return f"const float {name}[{n}] PROGMEM = {{{', '.join(map(str, data))}}};"
+
+        code = [f"// --- MiniScaler ({self.method}) ---", "#include <avr/pgmspace.h>"]
         
         if self.method == 'minmax':
             mins = [p['min'] for p in self.params]
             denoms = [p['denom'] for p in self.params]
-            code.append(f"float scaler_min[{n}] = {{{', '.join(map(str, mins))}}};")
-            code.append(f"float scaler_denom[{n}] = {{{', '.join(map(str, denoms))}}};")
-            code.append(f"void {fn_name}(float row[]) {{")
-            code.append(f"  for(int i=0; i<{n}; i++) {{")
-            code.append(f"    row[i] = (row[i] - scaler_min[i]) / scaler_denom[i];")
+            code.append(flash_arr(f"{fn_name}_min", mins))
+            code.append(flash_arr(f"{fn_name}_den", denoms))
             
+            code.append(f"void {fn_name}(float *row) {{")
+            code.append(f"  for(int i=0; i<{n}; i++) {{")
+            code.append(f"    float mn = pgm_read_float(&{fn_name}_min[i]);")
+            code.append(f"    float dn = pgm_read_float(&{fn_name}_den[i]);")
+            code.append(f"    row[i] = (row[i] - mn) / dn;")
             if self.feature_range != (0, 1):
                 r_min, r_max = self.feature_range
                 scale = r_max - r_min
                 code.append(f"    row[i] = row[i] * {scale} + {r_min};")
-            code.append("  }")
+            code.append("  }}")
             code.append("}")
             
         elif self.method == 'standard':
             means = [p['mean'] for p in self.params]
             stds = [p['std'] for p in self.params]
-            code.append(f"float scaler_mean[{n}] = {{{', '.join(map(str, means))}}};")
-            code.append(f"float scaler_std[{n}] = {{{', '.join(map(str, stds))}}};")
-            code.append(f"void {fn_name}(float row[]) {{")
-            code.append(f"  for(int i=0; i<{n}; i++) {{")
-            code.append(f"    row[i] = (row[i] - scaler_mean[i]) / scaler_std[i];")
-            code.append("  }")
-            code.append("}")
+            code.append(flash_arr(f"{fn_name}_mean", means))
+            code.append(flash_arr(f"{fn_name}_std", stds))
             
+            code.append(f"void {fn_name}(float *row) {{")
+            code.append(f"  for(int i=0; i<{n}; i++) {{")
+            code.append(f"    float mu = pgm_read_float(&{fn_name}_mean[i]);")
+            code.append(f"    float sig = pgm_read_float(&{fn_name}_std[i]);")
+            code.append(f"    row[i] = (row[i] - mu) / sig;")
+            code.append("  }}")
+            code.append("}")
+
         return "\n".join(code)
 
 # ---------------------------
@@ -1250,73 +1225,87 @@ class KNearestNeighbors:
         return preds
 
     def to_arduino_code(self, fn_name="predict_knn"):
-        if not self.X_train:
-            return "// Error: Not trained"
+        if not self.X_train: return "// Error: Not trained"
         
         n_samples = len(self.X_train)
         n_features = len(self.X_train[0])
         
+        # Aplanar datos X para un array 1D simple
         flat_X = []
-        for row in self.X_train:
-            flat_X.extend(row)
+        for row in self.X_train: flat_X.extend(row)
+        
+        dtype_y = "int16_t" if self.task == 'classification' else "float"
         
         code = [
-            "// MiniML: K-Nearest Neighbors (C Export)",
+            "// --- MiniML KNN (Flash-based Optimization) ---",
             f"// K={self.k}, Samples={n_samples}, Features={n_features}",
-            "// ADVERTENCIA: Alto consumo de memoria Flash/RAM",
+            "// WARNING: High Flash usage. O(N) complexity.",
+            "#include <avr/pgmspace.h>",
             ""
         ]
         
-        code.append(f"const float knn_X[{n_samples * n_features}] = {{{', '.join(map(str, flat_X))}}};")
+        # Guardar todo el dataset en Flash
+        code.append(f"const float {fn_name}_X[{len(flat_X)}] PROGMEM = {{{', '.join(map(str, flat_X))}}};")
+        code.append(f"const {dtype_y} {fn_name}_y[{n_samples}] PROGMEM = {{{', '.join(map(str, self.y_train))}}};")
         
-        dtype_y = "int" if self.task == 'classification' else "float"
-        code.append(f"const {dtype_y} knn_y[{n_samples}] = {{{', '.join(map(str, self.y_train))}}};")
+        # Función predicción
+        code.append(f"{dtype_y} {fn_name}(float *row) {{")
+        # Arrays locales dinámicos pequeños. 
+        # Si N es grande, Bubble Sort en RAM es costoso. 
+        # Haremos una búsqueda lineal manteniendo solo los K mejores para no gastar RAM en arrays 'distances'.
+        # Estrategia "Priority Queue" in-place simplificada en RAM para ahorrar memoria.
         
-        code.append("")
-        code.append(f"{dtype_y} {fn_name}(float row[]) {{")
-        code.append(f"  float distances[{n_samples}];")
-        code.append(f"  int indices[{n_samples}];")
+        code.append(f"  float top_d[{self.k}];")
+        code.append(f"  {dtype_y} top_y[{self.k}];")
+        code.append(f"  // Init con infinito")
+        code.append(f"  for(int i=0; i<{self.k}; i++) top_d[i] = 3.4028235E38; // Max float")
         
-        code.append("  // 1. Calcular distancias Euclidianas")
         code.append(f"  for(int i=0; i<{n_samples}; i++) {{")
-        code.append("    float d = 0.0;")
+        code.append(f"    float d = 0.0;")
+        code.append(f"    // Calcular distancia leyendo Flash")
         code.append(f"    for(int j=0; j<{n_features}; j++) {{")
-        code.append(f"      float diff = row[j] - knn_X[i*{n_features} + j];")
-        code.append("      d += diff * diff;")
-        code.append("    }")
-        code.append("    distances[i] = sqrt(d);")
-        code.append("    indices[i] = i;")
-        code.append("  }")
+        code.append(f"      float tr_val = pgm_read_float(&{fn_name}_X[i*{n_features} + j]);")
+        code.append(f"      float diff = row[j] - tr_val;")
+        code.append(f"      d += diff * diff;")
+        code.append(f"    }}")
+        code.append(f"    d = sqrt(d);")
         
-        code.append("  // 2. Ordenar top K (Bubble sort parcial)")
-        code.append(f"  for(int i=0; i<{self.k}; i++) {{")
-        code.append(f"    for(int j=i+1; j<{n_samples}; j++) {{")
-        code.append("      if(distances[j] < distances[i]) {")
-        code.append("        float tmp_d = distances[i]; distances[i] = distances[j]; distances[j] = tmp_d;")
-        code.append("        int tmp_idx = indices[i]; indices[i] = indices[j]; indices[j] = tmp_idx;")
-        code.append("      }")
-        code.append("    }")
-        code.append("  }")
+        # Inserción ordenada en los top K (mantiene los k menores)
+        code.append(f"    // Inserción en lista ordenada de tamaño K")
+        code.append(f"    if (d < top_d[{self.k-1}]) {{")
+        code.append(f"       int pos = {self.k-1};")
+        code.append(f"       while(pos > 0 && d < top_d[pos-1]) {{")
+        code.append(f"         top_d[pos] = top_d[pos-1];")
+        code.append(f"         top_y[pos] = top_y[pos-1];")
+        code.append(f"         pos--;")
+        code.append(f"       }}")
+        code.append(f"       top_d[pos] = d;")
+        # Leer etiqueta de Flash solo si entra en top K
+        if self.task == 'classification':
+             code.append(f"       top_y[pos] = (int16_t)pgm_read_word(&{fn_name}_y[i]);")
+        else:
+             code.append(f"       top_y[pos] = pgm_read_float(&{fn_name}_y[i]);")
+        code.append(f"    }}")
+        code.append(f"  }}")
         
         if self.task == 'regression':
-            code.append("  // 3. Promedio")
-            code.append("  float sum = 0.0;")
-            code.append(f"  for(int i=0; i<{self.k}; i++) sum += knn_y[indices[i]];")
+            code.append("  // Average")
+            code.append(f"  float sum = 0.0;")
+            code.append(f"  for(int i=0; i<{self.k}; i++) sum += top_y[i];")
             code.append(f"  return sum / {self.k}.0;")
         else:
-            code.append("  // 3. Voto Mayoritario (Implementación simple)")
-            code.append(f"  {dtype_y} best_label = knn_y[indices[0]];")
-            code.append("  int max_count = 0;")
+            code.append("  // Majority Vote")
+            code.append(f"  {dtype_y} best_label = top_y[0];")
+            code.append(f"  int max_count = 0;")
             code.append(f"  for(int i=0; i<{self.k}; i++) {{")
-            code.append(f"    {dtype_y} current = knn_y[indices[i]];")
-            code.append("    int count = 0;")
+            code.append(f"    int count = 0;")
             code.append(f"    for(int j=0; j<{self.k}; j++) {{")
-            code.append("      if(knn_y[indices[j]] == current) count++;")
-            code.append("    }")
-            code.append("    if(count > max_count) { max_count = count; best_label = current; }")
-            code.append("  }")
-            code.append("  return best_label;")
-            
+            code.append(f"      if(top_y[j] == top_y[i]) count++;")
+            code.append(f"    }}")
+            code.append(f"    if(count > max_count) {{ max_count = count; best_label = top_y[i]; }}")
+            code.append(f"  }}")
+            code.append(f"  return best_label;")
+
         code.append("}")
         return "\n".join(code)
 
@@ -1422,7 +1411,7 @@ if __name__ == "__main__":
         transformed = scaler.transform([20.0, 400.0])
         print(f"  > Transformado (debe estar cerca de 0.0): {transformed}")
 
-        # 7. Validation Logic (Check Dims)
+        # Validation Logic (Check Dims)
         print("\n[TEST] Validación de Dimensiones (check_dims)...")
         try:
             # Entrenado con 2 features, intentamos predecir con 3

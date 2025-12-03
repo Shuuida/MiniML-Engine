@@ -350,30 +350,67 @@ def load_model(name: str, path: str) -> None:
     print(f"Modelo '{name}' cargado exitosamente.")
 
 def export_to_c(name: str) -> str:
-    """Genera el código C completo para el modelo."""
+    """
+    Genera el código C completo y optimizado para firmware (Arduino/AVR).
+    Aplica cuantificación automática para redes neuronales.
+    """
     if name not in _MODEL_REGISTRY:
         raise KeyError(f"Modelo '{name}' no encontrado")
-    model = _MODEL_REGISTRY[name]['model']
     
+    entry = _MODEL_REGISTRY[name]
+    model = entry['model']
+    
+    # Optimización Automática
+    # Si es una red neuronal y no está cuantizada, hazlo ahora para ahorrar Flash.
+    if hasattr(model, 'quantize') and not getattr(model, 'quantized', False):
+        print(f"[Export] Optimizando modelo '{name}' (Cuantificación int8)...")
+        model.quantize()
+
     code = []
-    code.append(f"// Exportación C para modelo: {name}")
+    code.append(f"// --- EduBot Export: {name} ---")
+    code.append("// Target: AVR (Arduino Uno/Mega) or ESP8266/32")
+    code.append("// Dependencies: None (Standard C + avr/pgmspace.h)")
+    code.append("")
     
+    # Exportar Scaler (si existe)
+    has_scaler = False
     if hasattr(model, 'scaler') and model.scaler:
-        code.append(model.scaler.to_arduino_code(fn_name="preprocess_data"))
+        has_scaler = True
+        code.append("// 1. Preprocessing Module")
+        code.append(model.scaler.to_arduino_code(fn_name="model_preprocess"))
         code.append("")
         
+    # Exportar Modelo Core
     if hasattr(model, "to_arduino_code"):
-        code.append(model.to_arduino_code(fn_name="predict_model"))
+        code.append("// 2. Inference Core")
+        # Para NN, la función será void(in, out), para árboles float/int(in)
+        # Estandarizamos el nombre interno
+        code.append(model.to_arduino_code(fn_name="model_predict_core"))
     else:
-        code.append("// Error: Este modelo no soporta exportación a C.")
+        code.append("// Error: Modelo no exportable.")
+        return "\n".join(code)
         
     code.append("")
-    code.append("// Función principal unificada")
-    code.append("float predict(float inputs[]) {")
-    if hasattr(model, 'scaler') and model.scaler:
-        code.append("  preprocess_data(inputs); // Escalado in-place")
-    code.append("  return predict_model(inputs);")
-    code.append("}")
+    code.append("// 3. Public API")
+    
+    # Generar Wrapper Unificado
+    # Detectar tipo de salida (escalar o vector)
+    is_nn = hasattr(model, 'n_outputs')
+    
+    if is_nn:
+        # Red Neuronal: void predict(float* in, float* out)
+        code.append("void predict(float *inputs, float *outputs) {")
+        if has_scaler:
+            code.append("  model_preprocess(inputs); // In-place scaling")
+        code.append("  model_predict_core(inputs, outputs);")
+        code.append("}")
+    else:
+        # Árbol/Regresión: float predict(float* in)
+        code.append("float predict(float *inputs) {")
+        if has_scaler:
+            code.append("  model_preprocess(inputs);")
+        code.append("  return model_predict_core(inputs);")
+        code.append("}")
     
     return "\n".join(code)
 
