@@ -17,7 +17,7 @@ Artefactos generados en: ./test_outputs/
 import os
 import shutil
 import time
-from core import ml_manager
+from miniml import ml_manager
 
 # Directorio para artefactos de salida
 OUTPUT_DIR = "test_outputs"

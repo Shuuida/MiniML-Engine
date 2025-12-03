@@ -4,7 +4,7 @@ Valida Pipeline completo, predicciones, y utilidades de runtime.
 """
 import json
 import traceback
-from core import ml_manager, ml_runtime
+from miniml import ml_manager, ml_runtime
 from typing import List, Any
 
 # -------------------------------------

@@ -1,7 +1,7 @@
 import json
 import time
 import traceback
-from core import ml_runtime, ml_manager
+from miniml import ml_runtime, ml_manager
 
 def trace_prediction(node, row, depth=0):
     """Traza el recorrido de una predicción a través del árbol."""
