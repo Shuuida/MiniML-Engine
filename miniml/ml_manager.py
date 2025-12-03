@@ -367,7 +367,7 @@ def export_to_c(name: str) -> str:
         model.quantize()
 
     code = []
-    code.append(f"// --- EduBot Export: {name} ---")
+    code.append(f"// --- MiniML Export: {name} ---")
     code.append("// Target: AVR (Arduino Uno/Mega) or ESP8266/32")
     code.append("// Dependencies: None (Standard C + avr/pgmspace.h)")
     code.append("")
