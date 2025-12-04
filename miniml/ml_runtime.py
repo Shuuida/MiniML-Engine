@@ -1,5 +1,5 @@
 """
-MiniML Core for EduBot
+MiniML Runtime for Embedded Systems
 ----------------------
 Runtime principal del framework.
 Incluye implementaciones de algoritmos ML desde cero (sin dependencias externas).
