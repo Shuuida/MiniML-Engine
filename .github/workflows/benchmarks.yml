@@ -62,23 +62,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup Toolchain
+      - name: Setup Toolchains (ARM + AVR)
         id: toolchain
         run: |
           ARCH=${{ inputs.target_arch || 'arm' }}
-          echo "Setting up for $ARCH..."
+          echo "Setting up toolchains for $ARCH and AVR..."
           
-          if [ "$ARCH" == "arm" ]; then
+          # Instalar toolchain ARM
+          if [ "$ARCH" == "arm" ] || [ "$ARCH" == "all" ]; then
             sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
-            echo "compiler=arm-none-eabi-gcc" >> $GITHUB_ENV
-            echo "cflags=-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -Wall -Werror" >> $GITHUB_ENV
-          elif [ "$ARCH" == "xtensa" ]; then
+            echo "compiler_arm=arm-none-eabi-gcc" >> $GITHUB_ENV
+            echo "cflags_arm=-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -Wall -Werror" >> $GITHUB_ENV
+            echo "ARM_TOOLCHAIN=installed" >> $GITHUB_ENV
+          fi
+          
+          # Instalar toolchain AVR (para demostrar código Arduino)
+          sudo apt-get update && sudo apt-get install -y gcc-avr binutils-avr avr-libc
+          echo "compiler_avr=avr-gcc" >> $GITHUB_ENV
+          echo "cflags_avr=-mmcu=atmega328p -Wall -Werror -Os" >> $GITHUB_ENV
+          echo "AVR_TOOLCHAIN=installed" >> $GITHUB_ENV
+          
+          # Toolchain genérico para validación de sintaxis
+          echo "compiler_gcc=gcc" >> $GITHUB_ENV
+          echo "cflags_gcc=-Wall -Werror" >> $GITHUB_ENV
+          
+          if [ "$ARCH" == "xtensa" ]; then
             echo "Assuming Xtensa toolchain is pre-installed on self-hosted runner."
-            echo "compiler=xtensa-esp32-elf-gcc" >> $GITHUB_ENV
-            echo "cflags=-Wall -Werror" >> $GITHUB_ENV
-          else
-            echo "compiler=gcc" >> $GITHUB_ENV
-            echo "cflags=-Wall -Werror" >> $GITHUB_ENV
+            echo "compiler_xtensa=xtensa-esp32-elf-gcc" >> $GITHUB_ENV
+            echo "cflags_xtensa=-Wall -Werror" >> $GITHUB_ENV
           fi
 
       - name: Install MiniML
@@ -141,16 +152,25 @@ jobs:
               print("   → Cuantificando modelo antes de exportar...")
               model_nn.quantize()
           
-          # Exportar código C cuantificado
+          # Exportar código C cuantificado (intentará CMSISAdapter primero)
           nn_code = miniml.export_to_c("nn_xor_embedded")
           
-          # Verificar que se usó CMSISAdapter (código compatible con ARM)
-          if "CMSIS" in nn_code or "arm_fully_connected_s8" in nn_code or "predict_int8" in nn_code:
-              print("   ✓ Código generado con CMSISAdapter (compatible ARM)")
-          elif "avr/pgmspace.h" in nn_code and "#ifdef __AVR__" not in nn_code:
-              print("   ⚠️  Código generado es AVR específico (no compatible con ARM)")
-              print("   → Esto es normal si CMSISAdapter no está disponible")
+          # Detectar tipo de código generado
+          is_cmsis = "CMSIS" in nn_code or "arm_fully_connected_s8" in nn_code or "predict_int8" in nn_code
+          is_avr = "avr/pgmspace.h" in nn_code or "PROGMEM" in nn_code
           
+          if is_cmsis:
+              print("   ✓ Código generado con CMSISAdapter (compatible ARM Cortex-M)")
+              with open("build/generated/nn_xor_arm.h", "w") as f:
+                  f.write(nn_code)
+              print("   ✓ Guardado como: nn_xor_arm.h")
+          elif is_avr:
+              print("   ✓ Código generado para AVR/Arduino (PROGMEM)")
+              with open("build/generated/nn_xor_avr.h", "w") as f:
+                  f.write(nn_code)
+              print("   ✓ Guardado como: nn_xor_avr.h")
+          
+          # Guardar también con nombre genérico
           with open("build/generated/nn_xor_quantized.h", "w") as f:
               f.write(nn_code)
           print("   ✓ Código C generado: nn_xor_quantized.h")
@@ -234,64 +254,115 @@ jobs:
           
           python generate_embedded_models.py
 
-      - name: Compile C Artifacts (Syntax & Embedded Checks)
+      - name: Compile C Artifacts (ARM + AVR)
         run: |
-          echo "Compilando modelos generados con $compiler..."
-          echo "Flags: $cflags"
+          echo "=========================================="
+          echo "🔨 COMPILANDO MODELOS PARA ARM Y AVR"
+          echo "=========================================="
           
-          # Compilar cada modelo generado
-          models=("nn_xor_quantized.h" "dt_classifier.h" "linear_sensor.h")
-          
-          for model in "${models[@]}"; do
-            if [ -f "build/generated/$model" ]; then
-              echo "Compilando $model..."
-              
-              # Verificar si el código es específico de AVR (tiene avr/pgmspace.h sin protección)
-              if grep -q "^#include <avr/pgmspace.h>" "build/generated/$model"; then
-                echo "  ⚠️  $model contiene código AVR específico (avr/pgmspace.h)"
-                echo "  → Saltando compilación para ARM (este código es para AVR/Arduino)"
-                echo "  ✓ $model es válido para AVR, pero no para ARM Cortex-M"
-                continue
-              fi
-              
-              # Crear un archivo temporal .c para compilar
-              temp_c="build/generated/${model%.h}_temp.c"
-              
-              # Wrapper .c con protección condicional para AVR
-              cat <<CEOF > "$temp_c"
+          # Función helper para compilar un modelo
+          compile_model() {
+            local model_file=$1
+            local compiler=$2
+            local cflags=$3
+            local target_name=$4
+            
+            if [ ! -f "build/generated/$model_file" ]; then
+              echo "⚠️  $model_file no encontrado"
+              return 1
+            fi
+            
+            echo ""
+            echo "📦 Compilando $model_file para $target_name..."
+            
+            # Crear wrapper .c
+            temp_c="build/generated/${model_file%.h}_${target_name}_temp.c"
+            
+            cat <<CEOF > "$temp_c"
           #include <stdint.h>
           #include <math.h>
           
-          // Definir que NO estamos en AVR para esta compilación
-          #ifndef __AVR__
-          #define __AVR__ 0
+          // Definir target según el compilador
+          #ifdef __AVR__
+          #include <avr/pgmspace.h>
           #endif
           
-          // Incluir el modelo generado (si tiene protección condicional, funcionará)
-          #include "${model}"
+          // Incluir el modelo generado
+          #include "${model_file}"
           
           // Función dummy para evitar linker errors
           int main() { return 0; }
           CEOF
-              
-              # Compilar con flags embebidos
-              $compiler $cflags -c "$temp_c" -o "${temp_c%.c}.o" 2>&1 || {
-                # Si falla por avr/pgmspace.h, es código AVR y lo saltamos
-                if grep -q "avr/pgmspace.h" "$temp_c" 2>/dev/null || grep -q "avr/pgmspace.h" "build/generated/$model"; then
-                  echo "  ⚠️  $model es código AVR específico - saltando compilación ARM"
-                  continue
-                else
-                  echo "❌ Error compilando $model"
-                  exit 1
-                fi
-              }
-              echo "✓ $model compilado exitosamente para ARM"
+            
+            # Compilar
+            if $compiler $cflags -c "$temp_c" -o "${temp_c%.c}.o" 2>&1; then
+              echo "  ✅ $model_file compilado exitosamente para $target_name"
+              return 0
             else
-              echo "⚠️  $model no encontrado"
+              echo "  ❌ Error compilando $model_file para $target_name"
+              return 1
             fi
-          done
+          }
           
-          echo "✅ Compilación completada (modelos compatibles con ARM)"
+          # ==========================================
+          # COMPILAR PARA ARM CORTEX-M
+          # ==========================================
+          if [ "$ARM_TOOLCHAIN" == "installed" ]; then
+            echo ""
+            echo "🎯 === COMPILACIÓN ARM CORTEX-M4 ==="
+            
+            # Intentar compilar código ARM (CMSIS) si existe
+            if [ -f "build/generated/nn_xor_arm.h" ]; then
+              compile_model "nn_xor_arm.h" "$compiler_arm" "$cflags_arm" "ARM Cortex-M4"
+            fi
+            
+            # Compilar otros modelos que no sean AVR específicos
+            for model in "dt_classifier.h" "linear_sensor.h"; do
+              if [ -f "build/generated/$model" ]; then
+                # Solo compilar si NO es código AVR específico
+                if ! grep -q "^#include <avr/pgmspace.h>" "build/generated/$model"; then
+                  compile_model "$model" "$compiler_arm" "$cflags_arm" "ARM Cortex-M4"
+                fi
+              fi
+            done
+          fi
+          
+          # ==========================================
+          # COMPILAR PARA AVR (ARDUINO)
+          # ==========================================
+          if [ "$AVR_TOOLCHAIN" == "installed" ]; then
+            echo ""
+            echo "🎯 === COMPILACIÓN AVR (ARDUINO UNO) ==="
+            
+            # Compilar código AVR si existe
+            if [ -f "build/generated/nn_xor_avr.h" ]; then
+              compile_model "nn_xor_avr.h" "$compiler_avr" "$cflags_avr" "AVR (Arduino)"
+            fi
+            
+            # También intentar compilar el genérico si es AVR
+            if [ -f "build/generated/nn_xor_quantized.h" ]; then
+              if grep -q "avr/pgmspace.h\|PROGMEM" "build/generated/nn_xor_quantized.h"; then
+                compile_model "nn_xor_quantized.h" "$compiler_avr" "$cflags_avr" "AVR (Arduino)"
+              fi
+            fi
+            
+            # Compilar otros modelos que sean compatibles con AVR
+            for model in "dt_classifier.h" "linear_sensor.h"; do
+              if [ -f "build/generated/$model" ]; then
+                # Crear versión AVR-friendly (definir __AVR__)
+                compile_model "$model" "$compiler_avr" "$cflags_avr" "AVR (Arduino)"
+              fi
+            done
+          fi
+          
+          echo ""
+          echo "=========================================="
+          echo "✅ COMPILACIÓN COMPLETADA"
+          echo "=========================================="
+          echo "MiniML demuestra funcionamiento en:"
+          [ "$ARM_TOOLCHAIN" == "installed" ] && echo "  ✓ ARM Cortex-M4"
+          [ "$AVR_TOOLCHAIN" == "installed" ] && echo "  ✓ AVR (Arduino Uno/Nano)"
+          echo "=========================================="
 
       - name: Validate Embedded Features
         run: |
