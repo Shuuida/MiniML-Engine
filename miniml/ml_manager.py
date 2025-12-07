@@ -16,11 +16,27 @@ from typing import Any, Dict, List, Optional, Union
 import json
 import os
 import time
+import tempfile
 
 # Módulos internos del framework
-from . import ml_runtime
-from . import ml_factory
-from .ml_compat import impute_missing_values
+try:
+    from . import ml_runtime
+    from . import ml_factory
+    from .ml_compat import impute_missing_values
+except ImportError:
+    # Fallback para ejecución local sin paquete
+    import ml_runtime
+    import ml_factory
+    from ml_compat import impute_missing_values
+
+# INTENTO DE IMPORTACIÓN DE ADAPTER (Seguro)
+_CMSIS_AVAILABLE = False
+try:
+    from adapters.cmsis_nn.adapter import CMSISAdapter
+    _CMSIS_AVAILABLE = True
+except ImportError:
+    # No pasa nada, simplemente no usaremos CMSIS
+    pass
 
 # Registro en memoria para modelos
 _MODEL_REGISTRY: Dict[str, Any] = {}
@@ -266,19 +282,28 @@ def save_model(name: str, path: str) -> None:
             if hasattr(t, 'root') and t.root:
                 serial_data['model_data']['trees'].append(_flatten_tree_to_arrays(t.root))
 
-    elif hasattr(model, 'weights'): # SVM, Linear, NN
-        serial_data['model_data']['type'] = 'weights_based'
-        if hasattr(model, 'W1'): # NN
-            serial_data['model_data']['subtype'] = 'nn'
-            serial_data['model_data']['W1'] = model.W1
-            serial_data['model_data']['W2'] = model.W2
-            serial_data['model_data']['B1'] = model.B1
-            serial_data['model_data']['B2'] = model.B2
-            serial_data['model_data']['config'] = {
-                'n_inputs': model.n_inputs, 'n_hidden': model.n_hidden, 'n_outputs': model.n_outputs
-            }
-        else: # Linear / SVM
-            serial_data['model_data']['weights'] = model.weights
+    # MiniNeuralNetworks (Verificación por W1 y B1)
+    elif hasattr(model, 'W1') and hasattr(model, 'n_hidden'):
+        serial_data['model_data']['type'] = 'neural_network'
+        serial_data['model_data']['config'] = {
+            'n_inputs': model.n_inputs, 'n_hidden': model.n_hidden, 'n_outputs': model.n_outputs,
+            'hidden_activation': getattr(model, 'hidden_activation', 'sigmoid'),
+            'output_activation': getattr(model, 'output_activation', 'sigmoid')
+        }
+        # Guardar pesos y escalas
+        serial_data['model_data']['W1'] = model.W1
+        serial_data['model_data']['W2'] = model.W2
+        serial_data['model_data']['B1'] = model.B1
+        serial_data['model_data']['B2'] = model.B2
+        if hasattr(model, 'act_scales'):
+            serial_data['model_data']['act_scales'] = model.act_scales
+
+    elif hasattr(model, 'weights'): 
+        serial_data['model_data']['type'] = 'linear_svm'
+        serial_data['model_data']['weights'] = model.weights
+        if hasattr(model, 'bias'): serial_data['model_data']['bias'] = model.bias # SVM
+        # LinearModel guarda el bias dentro de weights usualmente, pero por seguridad:
+        if hasattr(model, 'intercept'): serial_data['model_data']['intercept'] = model.intercept
 
     elif hasattr(model, 'X_train'): # KNN
         serial_data['model_data']['type'] = 'knn'
@@ -287,7 +312,10 @@ def save_model(name: str, path: str) -> None:
         serial_data['model_data']['k'] = model.k
         serial_data['model_data']['task'] = model.task
 
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Crear directorio si no existe (solo si hay un directorio en la ruta)
+    dir_path = os.path.dirname(path)
+    if dir_path:  # Solo crear si hay un directorio (no cadena vacía)
+        os.makedirs(dir_path, exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(serial_data, f, indent=2)
     print(f"Modelo '{name}' guardado en {path}")
@@ -302,23 +330,61 @@ def load_model(name: str, path: str) -> None:
         data = json.load(f)
 
     meta = data.get('meta', {})
-    model_type = meta.get('type', 'unknown')
     model_data = data.get('model_data', {})
+    model_type_str = model_data.get('type') or meta.get('type', 'unknown')
     
     params = meta.get('params') or {}
-    try:
-        model = ml_factory.create_model(model_type, params)
-    except Exception:
-        print(f"Warning: No se pudo instanciar '{model_type}' via Factory. Usando objeto genérico.")
-        return
+    
+    # Determinar el tipo para el factory (debe coincidir con lo que espera ml_factory)
+    # El factory busca "neural" o "network" en el string, así que usamos el tipo de meta o model_data
+    factory_type = meta.get('type', model_type_str)
+    # Asegurar que el tipo sea compatible con el factory
+    if model_type_str == 'neural_network' or 'neural' in factory_type.lower() or 'network' in factory_type.lower():
+        factory_type = 'neural_network'  # El factory acepta cualquier string con "neural" o "network"
+    elif model_type_str == 'linear_svm':
+        factory_type = 'linear_regression'
 
-    # Restauración de estado (Simplificada para mantener consistencia)
-    if model_data.get('type') == 'tree' and hasattr(model, 'root'):
+    try:
+        # Si es NN, usamos la config guardada para instanciar correctamente
+        if model_type_str == 'neural_network' and 'config' in model_data:
+            cfg = model_data['config']
+            # Actualizar params con lo guardado, pero filtrar los que no son del constructor
+            # El constructor acepta: n_inputs, n_hidden, n_outputs, learning_rate, epochs, seed
+            # hidden_activation y output_activation se establecen después como atributos
+            constructor_params = ['n_inputs', 'n_hidden', 'n_outputs', 'learning_rate', 'epochs', 'seed']
+            for key in constructor_params:
+                if key in cfg:
+                    params[key] = cfg[key]
+        
+        # Usar factory_type en lugar de meta.get('type') para asegurar compatibilidad
+        model = ml_factory.create_model(factory_type, params)
+    except Exception as e:
+        print(f"Warning: Fallo factory instanciando '{factory_type}': {e}")
+        import traceback
+        traceback.print_exc()
+        raise RuntimeError(f"No se pudo cargar el modelo '{name}': fallo en la creación del modelo") from e
+
+    # Restauración de estado
+    if model_type_str == 'neural_network':
+        # Restaurar Matrices
+        model.W1 = model_data.get('W1', [])
+        model.W2 = model_data.get('W2', [])
+        model.B1 = model_data.get('B1', [])
+        model.B2 = model_data.get('B2', [])
+        # Restaurar Configuración de Activación
+        cfg = model_data.get('config', {})
+        model.hidden_activation = cfg.get('hidden_activation', 'sigmoid')
+        model.output_activation = cfg.get('output_activation', 'sigmoid')
+        # Restaurar escalas
+        if 'act_scales' in model_data:
+            model.act_scales = model_data['act_scales']
+
+    elif model_type_str == 'tree' and hasattr(model, 'root'):
         from .ml_compat import _unflatten_arrays_to_tree
         if 'struct' in model_data:
             model.root = _unflatten_arrays_to_tree(model_data['struct'])
             
-    elif model_data.get('type') == 'forest' and hasattr(model, 'trees'):
+    elif model_type_str == 'forest' and hasattr(model, 'trees'):
         from .ml_compat import _unflatten_arrays_to_tree
         model.trees = []
         for tree_struct in model_data.get('trees', []):
@@ -326,19 +392,16 @@ def load_model(name: str, path: str) -> None:
             dt.root = _unflatten_arrays_to_tree(tree_struct)
             model.trees.append(dt)
 
-    elif model_data.get('type') == 'weights_based':
-        if model_data.get('subtype') == 'nn':
-            model.W1 = model_data.get('W1')
-            model.W2 = model_data.get('W2')
-            model.B1 = model_data.get('B1')
-            model.B2 = model_data.get('B2')
-        else:
-            model.weights = model_data.get('weights')
+    elif model_type_str == 'linear_svm':
+        model.weights = model_data.get('weights', [])
+        if hasattr(model, 'bias') and 'bias' in model_data: model.bias = model_data['bias']
+        if hasattr(model, 'intercept') and 'intercept' in model_data: model.intercept = model_data['intercept']
 
-    elif model_data.get('type') == 'knn':
-        model.X_train = model_data.get('X_train')
-        model.y_train = model_data.get('y_train')
+    elif model_type_str == 'knn':
+        model.X_train = model_data.get('X_train', [])
+        model.y_train = model_data.get('y_train', [])
 
+    # Restaurar Scaler
     if 'scaler' in data:
         s_data = data['scaler']
         scaler = ml_runtime.MiniScaler(method=s_data['method'], feature_range=s_data['feature_range'])
@@ -351,8 +414,8 @@ def load_model(name: str, path: str) -> None:
 
 def export_to_c(name: str) -> str:
     """
-    Genera el código C completo y optimizado para firmware (Arduino/AVR).
-    Aplica cuantificación automática para redes neuronales.
+    Genera el código C completo.
+    Detecta automáticamente si debe usar CMSISAdapter (NN) o el exportador nativo.
     """
     if name not in _MODEL_REGISTRY:
         raise KeyError(f"Modelo '{name}' no encontrado")
@@ -360,52 +423,99 @@ def export_to_c(name: str) -> str:
     entry = _MODEL_REGISTRY[name]
     model = entry['model']
     
-    # Optimización Automática
-    # Si es una red neuronal y no está cuantizada, hazlo ahora para ahorrar Flash.
+    # Optimización Automática (Cuantificación)
     if hasattr(model, 'quantize') and not getattr(model, 'quantized', False):
         print(f"[Export] Optimizando modelo '{name}' (Cuantificación int8)...")
-        model.quantize()
+        # Si load_model restauró act_scales, esto funcionará sin dataset
+        try:
+            model.quantize()
+        except RuntimeError as e:
+            return f"// Error de exportación: {e} (¿Olvidaste entrenar o cargar act_scales?)"
 
     code = []
-    code.append(f"// --- MiniML Export: {name} ---")
-    code.append("// Target: AVR (Arduino Uno/Mega) or ESP8266/32")
-    code.append("// Dependencies: None (Standard C + avr/pgmspace.h)")
-    code.append("")
     
-    # Exportar Scaler (si existe)
+    # Decisión de Exportador: ¿Usar Adapter o Nativo?
+    used_adapter = False
+    adapter_code = ""
+    
+    # Si es una Neural Network (tiene q_W1) usamos el Adapter avanzado
+    if hasattr(model, 'q_W1'):
+        try:
+            print(f"[Export] Usando CMSISAdapter para '{name}'...")
+            adapter = CMSISAdapter(model)
+            
+            # Truco para capturar la salida del adapter (que escribe a archivo) en un string
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp:
+                tmp_path = tmp.name
+            
+            adapter.generate_c(tmp_path)
+            
+            with open(tmp_path, 'r') as f:
+                adapter_code = f.read()
+            
+            os.remove(tmp_path)
+            used_adapter = True
+        except Exception as e:
+            print(f"[Export] Falló CMSISAdapter: {e}. Usando fallback nativo.")
+
+    # Construcción del Código Final
+    code.append(f"// --- MiniML Export: {name} ---")
+    
+    # Preprocessing (Scaler)
     has_scaler = False
     if hasattr(model, 'scaler') and model.scaler:
         has_scaler = True
-        code.append("// 1. Preprocessing Module")
+        code.append("// [1] Preprocessing Module")
         code.append(model.scaler.to_arduino_code(fn_name="model_preprocess"))
         code.append("")
         
-    # Exportar Modelo Core
-    if hasattr(model, "to_arduino_code"):
-        code.append("// 2. Inference Core")
-        # Para NN, la función será void(in, out), para árboles float/int(in)
-        # Estandarizamos el nombre interno
+    # Inference Core
+    code.append("// [2] Inference Core")
+    if used_adapter:
+        code.append("// Generated via CMSISAdapter (Fixed-Point / CMSIS-NN compatible)")
+        code.append(adapter_code)
+        # El adapter genera una función llamada 'predict_int8', hay que tenerlo en cuenta en el wrapper
+    elif hasattr(model, "to_arduino_code"):
+        code.append("// Generated via MiniML Runtime (Native)")
         code.append(model.to_arduino_code(fn_name="model_predict_core"))
     else:
-        code.append("// Error: Modelo no exportable.")
-        return "\n".join(code)
-        
+        return "// Error: Modelo no exportable."
+
     code.append("")
-    code.append("// 3. Public API")
+    code.append("// [3] Public API Wrapper")
     
-    # Generar Wrapper Unificado
-    # Detectar tipo de salida (escalar o vector)
-    is_nn = hasattr(model, 'n_outputs')
-    
-    if is_nn:
-        # Red Neuronal: void predict(float* in, float* out)
+    # Wrapper Unificado
+    if used_adapter:
+        # Wrapper para el Adapter (convierte float -> int8 -> float)
+        # Asume que el Adapter generó 'predict_int8(int8_t* in, int8_t* out)'
+        # Y necesitamos las escalas para des-cuantizar entrada/salida
+        s_in = model.act_scales['input']
+        s_out = model.act_scales['output']
+        
+        code.append(f"void predict(float *inputs, float *outputs) {{")
+        if has_scaler:
+            code.append("  model_preprocess(inputs); // Scale inputs (0-1 approx)")
+            
+        code.append(f"  // Quantize Inputs (Float -> Int8)")
+        code.append(f"  int8_t input_q[{model.n_inputs}];")
+        code.append(f"  for(int i=0; i<{model.n_inputs}; i++) input_q[i] = (int8_t)(inputs[i] / {s_in:.8f});")
+        
+        code.append(f"  // Run Inference")
+        code.append(f"  int8_t output_q[{model.n_outputs}];")
+        code.append(f"  predict_int8(input_q, output_q);")
+        
+        code.append(f"  // Dequantize Outputs (Int8 -> Float)")
+        code.append(f"  for(int i=0; i<{model.n_outputs}; i++) outputs[i] = (float)output_q[i] * {s_out:.8f};")
+        code.append("}")
+        
+    elif hasattr(model, 'n_outputs'): # NN Nativa (ml_runtime)
         code.append("void predict(float *inputs, float *outputs) {")
         if has_scaler:
-            code.append("  model_preprocess(inputs); // In-place scaling")
+            code.append("  model_preprocess(inputs);")
         code.append("  model_predict_core(inputs, outputs);")
         code.append("}")
-    else:
-        # Árbol/Regresión: float predict(float* in)
+        
+    else: # Arboles / Regresión lineal
         code.append("float predict(float *inputs) {")
         if has_scaler:
             code.append("  model_preprocess(inputs);")

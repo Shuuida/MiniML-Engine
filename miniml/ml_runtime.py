@@ -849,7 +849,7 @@ class MiniNeuralNetwork:
         self.learning_rate = float(learning_rate)
         self.epochs = int(epochs)
         self.quantized = False
-        self.q_params = {}
+        self.act_scales = {}
         self.hidden_activation = "sigmoid"
         self.output_activation = "sigmoid"
         
@@ -859,33 +859,64 @@ class MiniNeuralNetwork:
         def rand_matrix(rows, cols):
             return [[(random.random() - 0.5) * 0.2 for _ in range(cols)] for _ in range(rows)]
         
-        self.W1 = rand_matrix(self.n_hidden, self.n_inputs)
+        limit1 = math.sqrt(6 / (self.n_inputs + self.n_hidden))
+        self.W1 = [[random.uniform(-limit1, limit1) for _ in range(self.n_inputs)] for _ in range(self.n_hidden)]
         self.B1 = [[0.0] for _ in range(self.n_hidden)]
-        self.W2 = rand_matrix(self.n_outputs, self.n_hidden)
+        
+        limit2 = math.sqrt(6 / (self.n_hidden + self.n_outputs))
+        self.W2 = [[random.uniform(-limit2, limit2) for _ in range(self.n_hidden)] for _ in range(self.n_outputs)]
         self.B2 = [[0.0] for _ in range(self.n_outputs)]
 
+        # Atributos para cuantificación (se llenan en quantize)
+        self.q_W1 = []
+        self.i32_B1 = []
+        self.requant_mult1 = []
+        self.s_W1_list = []
+        
+        self.q_W2 = []
+        self.i32_B2 = []
+        self.requant_mult2 = []
+        self.s_W2_list = []
+
     def clip(self, value, min_val=-60.0, max_val=60.0):
-        return clip(value, min_val, max_val)
+        if value < min_val: return min_val
+        if value > max_val: return max_val
+        return value
+
     def sigmoid(self, x):
-        return sigmoid(x)
+        # Protección contra overflow en exp
+        if x > 60: return 1.0
+        if x < -60: return 0.0
+        return 1.0 / (1.0 + math.exp(-x))
+
     def sigmoid_deriv(self, out_val):
-        return sigmoid_derivative(out_val)
+        return out_val * (1.0 - out_val)
+
     def relu(self, x):
-        return relu(x)
+        return x if x > 0 else 0.0
+
     def relu_derivative(self, x):
-        return relu_derivative(x)
+        return 1.0 if x > 0 else 0.0
+
+    def linear(self, x):
+        return x
+    
+    def linear_derivative(self, x):
+        return 1.0
 
     def _activate(self, x, act):
-        if act == 'sigmoid': return sigmoid(x)
-        if act == 'relu': return relu(x)
-        if act == 'linear': return linear(x)
-        return sigmoid(x)
+        if act == 'sigmoid': return self.sigmoid(x)
+        if act == 'relu': return self.relu(x)
+        if act == 'linear': return self.linear(x)
+        return self.sigmoid(x)
 
     def _act_derivative(self, out_val, act, pre_x=None):
-        if act == 'sigmoid': return sigmoid_derivative(out_val)
-        if act == 'relu': return relu_derivative(pre_x if pre_x is not None else out_val)
-        if act == 'linear': return linear_derivative(out_val)
-        return sigmoid_derivative(out_val)
+        # Nota: Para ReLU, la derivada idealmente usa el valor pre-activación (pre_x),
+        # pero a menudo se aproxima usando el output.
+        if act == 'sigmoid': return self.sigmoid_deriv(out_val)
+        if act == 'relu': return self.relu_derivative(out_val) 
+        if act == 'linear': return self.linear_derivative(out_val)
+        return self.sigmoid_deriv(out_val)
 
     def _forward(self, x_row):
         z1, a1 = [], []
@@ -954,6 +985,8 @@ class MiniNeuralNetwork:
                         self.W1[i][j] -= self.learning_rate * delta1[i] * xi[j]
                     self.B1[i][0] -= self.learning_rate * delta1[i]
 
+        self.calibrate(dataset)
+
     def predict(self, X_list):
         # Validar dimensiones
         check_dims(X_list, self.n_inputs, "MiniNeuralNetwork Predict")
@@ -967,91 +1000,182 @@ class MiniNeuralNetwork:
                 preds.append(a2[:])
         return preds
 
-    def quantize(self):
+    def calibrate(self, dataset: List[List[float]]):
         """
-        Convierte pesos (float) a int8 (-128 a 127) para ahorrar espacio.
-        Calcula factores de escala para reconstruir el valor aproximado.
+        Calcula rangos de activación (min/max) para Input, Hidden y Output.
+        Esencial para cuantificación int8 (Post-Training Quantization).
         """
-        if self.quantized: return
+        # Validación básica para no calibrar con basura
+        if not dataset: return
         
-        def quantize_layer(weights):
-            # Encontrar rango global de la capa
-            flat = [w for row in weights for w in row]
-            min_w, max_w = min(flat), max(flat)
-            abs_max = max(abs(min_w), abs(max_w))
-            
-            # Escala: mapear abs_max a 127
-            scale = abs_max / 127.0 if abs_max != 0 else 1.0
-            
-            q_weights = []
-            for row in weights:
-                # Convertir a int8
-                q_row = [int(w / scale) for w in row]
-                q_weights.append(q_row)
-            return q_weights, scale
+        # Detectar si dataset tiene target o solo features
+        sample_row = dataset[0]
+        # Si la fila es más larga que las entradas esperadas, asumimos que el último es target
+        if len(sample_row) > self.n_inputs:
+            X = [row[:-1] for row in dataset]
+        else:
+            X = dataset
 
-        self.q_W1, self.s_W1 = quantize_layer(self.W1)
-        self.q_W2, self.s_W2 = quantize_layer(self.W2)
+        max_in, max_hidden, max_out = 0.0, 0.0, 0.0
+
+        for x in X:
+            # Input
+            local_max_in = max(abs(xi) for xi in x)
+            if local_max_in > max_in: max_in = local_max_in
+
+            # Hidden
+            a1_vals = []
+            for i in range(self.n_hidden):
+                s = sum(self.W1[i][j] * x[j] for j in range(self.n_inputs)) + self.B1[i][0]
+                val = self._activate(s, self.hidden_activation)
+                a1_vals.append(val)
+            local_max_hidden = max(abs(v) for v in a1_vals)
+            if local_max_hidden > max_hidden: max_hidden = local_max_hidden
+
+            # Output
+            a2_vals = []
+            for k in range(self.n_outputs):
+                s = sum(self.W2[k][i] * a1_vals[i] for i in range(self.n_hidden)) + self.B2[k][0]
+                val = self._activate(s, self.output_activation)
+                a2_vals.append(val)
+            local_max_out = max(abs(v) for v in a2_vals)
+            if local_max_out > max_out: max_out = local_max_out
+
+        if max_in < 1e-9: max_in = 1.0
+        if max_hidden < 1e-9: max_hidden = 1.0
+        if max_out < 1e-9: max_out = 1.0
+
+        self.act_scales = {
+            'input': max_in / 127.0,
+            'hidden': max_hidden / 127.0,
+            'output': max_out / 127.0
+        }
+
+    def quantize(self, per_channel: bool = True):
+        if self.quantized: return
+        # Ahora act_scales debería existir siempre tras un fit()
+        if not self.act_scales:
+            raise RuntimeError("Model not calibrated. Run calibrate() before quantize().")
+
+        s_in = self.act_scales['input']
+        s_hidden = self.act_scales['hidden']
+        s_out = self.act_scales['output']
+
+        def quantize_layer(weights, biases, input_scale, output_scale):
+            q_w_mat = []
+            q_b_vec = []
+            mult_vec = []
+            scale_w_vec = []
+            for i, row in enumerate(weights):
+                max_w = max(abs(w) for w in row)
+                if max_w < 1e-9: max_w = 1e-9
+                s_w = max_w / 127.0
+                scale_w_vec.append(s_w)
+                
+                q_row = [int(round(w / s_w)) for w in row]
+                q_row = [max(-127, min(127, x)) for x in q_row]
+                q_w_mat.append(q_row)
+                
+                effective_scale = input_scale * s_w
+                b_val = biases[i][0]
+                b_int = int(round(b_val / effective_scale))
+                b_int = max(-2147483648, min(2147483647, b_int))
+                q_b_vec.append(b_int)
+                
+                if output_scale < 1e-12: m = 0.0
+                else: m = effective_scale / output_scale
+                mult_vec.append(m)
+            return q_w_mat, q_b_vec, mult_vec, scale_w_vec
+
+        self.q_W1, self.i32_B1, self.requant_mult1, self.s_W1_list = quantize_layer(self.W1, self.B1, s_in, s_hidden)
+        self.q_W2, self.i32_B2, self.requant_mult2, self.s_W2_list = quantize_layer(self.W2, self.B2, s_hidden, s_out)
         self.quantized = True
-        print(f"Quantization applied. Scale W1: {self.s_W1:.6f}, Scale W2: {self.s_W2:.6f}")
 
     def to_arduino_code(self, fn_name="nn_predict"):
-        # Asegurar cuantificación antes de exportar para 8-bits
+        """
+        Genera código C optimizado para AVR (Arduino Uno/Nano).
+        Modo Híbrido: Pesos int8 en PROGMEM (Flash), Cálculo en Float.
+        Ahorra mucha SRAM, ideal para 8-bit.
+        """
+        # Asegurar cuantificación
         if not self.quantized:
-            self.quantize()
+            print("[MiniML] Warning: Exporting unquantized model to AVR.")
+            # Si no hay escalas, inventamos unas seguras (Dummy Calibration) para no romper el flujo
+            if not self.act_scales:
+                print("[MiniML] Auto-calibrating with default range [-1, 1] for export safety...")
+                self.act_scales = {'input': 1.0/127.0, 'hidden': 1.0/127.0, 'output': 1.0/127.0}
+            
+            self.quantize(per_channel=True)
 
         lines = [
-            f"// --- MiniML MLP (Quantized int8) ---",
-            "// Weights in PROGMEM (Flash). Arithmetic in float for accuracy.",
-            "#include <avr/pgmspace.h>"
+            f"// --- MiniML MLP (Optimized for 8-bit AVR) ---",
+            "// Strategy: Hybrid (Int8 Storage in Flash, Float Compute)",
+            "// Saves SRAM using PROGMEM.",
+            "#include <avr/pgmspace.h>",
+            "#include <math.h>"
         ]
         
-        # Helper C Array
-        def to_c(matrix): 
+        def to_c_matrix(matrix): 
             return '{' + ','.join('{' + ','.join(map(str, r)) + '}' for r in matrix) + '}'
-
-        # Exportar datos a PROGMEM
-        lines.append(f"const int8_t {fn_name}_W1[{self.n_hidden}][{self.n_inputs}] PROGMEM = {to_c(self.q_W1)};")
-        lines.append(f"const float {fn_name}_sW1 = {self.s_W1};")
-        lines.append(f"const float {fn_name}_B1[{self.n_hidden}] PROGMEM = {{{', '.join(map(str, [b[0] for b in self.B1]))}}};")
         
-        lines.append(f"const int8_t {fn_name}_W2[{self.n_outputs}][{self.n_hidden}] PROGMEM = {to_c(self.q_W2)};")
-        lines.append(f"const float {fn_name}_sW2 = {self.s_W2};")
-        lines.append(f"const float {fn_name}_B2[{self.n_outputs}] PROGMEM = {{{', '.join(map(str, [b[0] for b in self.B2]))}}};")
+        def to_c_array(arr):
+            return '{' + ', '.join(map(str, arr)) + '}'
 
-        # Función de inferencia
+        # Layer 1 Generation
+        # Pesos (int8) en PROGMEM
+        lines.append(f"const int8_t {fn_name}_W1[{self.n_hidden}][{self.n_inputs}] PROGMEM = {to_c_matrix(self.q_W1)};")
+        
+        # Escalas (float) en PROGMEM - Usamos s_W1_list (La nueva API)
+        lines.append(f"const float {fn_name}_sW1[{self.n_hidden}] PROGMEM = {to_c_array(self.s_W1_list)};")
+        
+        # Bias (float original) en PROGMEM
+        # Nota: En modo híbrido AVR, es más rápido leer el float original que reconstruirlo de int32
+        bias1_floats = [b[0] for b in self.B1]
+        lines.append(f"const float {fn_name}_B1[{self.n_hidden}] PROGMEM = {to_c_array(bias1_floats)};")
+
+        # Layer 2 Generation
+        lines.append(f"const int8_t {fn_name}_W2[{self.n_outputs}][{self.n_hidden}] PROGMEM = {to_c_matrix(self.q_W2)};")
+        lines.append(f"const float {fn_name}_sW2[{self.n_outputs}] PROGMEM = {to_c_array(self.s_W2_list)};")
+        
+        bias2_floats = [b[0] for b in self.B2]
+        lines.append(f"const float {fn_name}_B2[{self.n_outputs}] PROGMEM = {to_c_array(bias2_floats)};")
+
+        # Inference Function
         lines.append(f"void {fn_name}(float *row, float *out) {{")
         lines.append(f"  float a1[{self.n_hidden}];")
         
-        # Layer 1
+        # Loop Capa 1
         lines.append(f"  for(int i=0; i<{self.n_hidden}; i++) {{")
         lines.append("    float sum = 0.0;")
-        lines.append(f"    for(int j=0; j<{self.n_inputs}; j++) {{")
-        lines.append(f"      // Read int8 from Flash, convert to float via scale")
-        lines.append(f"      int8_t w = (int8_t)pgm_read_byte(&{fn_name}_W1[i][j]);")
-        lines.append(f"      sum += (w * {fn_name}_sW1) * row[j];")
-        lines.append("    }")
-        lines.append(f"    sum += pgm_read_float(&{fn_name}_B1[i]);")
+        lines.append(f"    float s = pgm_read_float(&{fn_name}_sW1[i]); // Read Scale")
         
-        # Activación Oculta
+        lines.append(f"    for(int j=0; j<{self.n_inputs}; j++) {{")
+        lines.append(f"      int8_t w = (int8_t)pgm_read_byte(&{fn_name}_W1[i][j]); // Read Weight")
+        lines.append(f"      sum += (float)w * s * row[j]; // Dequantize on-the-fly")
+        lines.append("    }")
+        lines.append(f"    sum += pgm_read_float(&{fn_name}_B1[i]); // Add Bias")
+        
+        # Activación L1
         if self.hidden_activation == 'relu':
-            lines.append("    a1[i] = (sum > 0) ? sum : 0;")
-        else: # Sigmoid (aprox rápida)
+            lines.append("    a1[i] = (sum > 0) ? sum : 0.0;")
+        else: # Sigmoid
             lines.append("    if(sum>10) a1[i]=1.0; else if(sum<-10) a1[i]=0.0; else a1[i]=1.0/(1.0+exp(-sum));")
         lines.append("  }")
 
-        # Layer 2
+        # Loop Capa 2
         lines.append(f"  for(int k=0; k<{self.n_outputs}; k++) {{")
         lines.append("    float sum = 0.0;")
+        lines.append(f"    float s = pgm_read_float(&{fn_name}_sW2[k]);")
+
         lines.append(f"    for(int i=0; i<{self.n_hidden}; i++) {{")
         lines.append(f"      int8_t w = (int8_t)pgm_read_byte(&{fn_name}_W2[k][i]);")
-        lines.append(f"      sum += (w * {fn_name}_sW2) * a1[i];")
+        lines.append(f"      sum += (float)w * s * a1[i];")
         lines.append("    }")
         lines.append(f"    sum += pgm_read_float(&{fn_name}_B2[k]);")
-        
-        # Activación Salida
+
+        # Activación L2
         if self.output_activation == 'relu':
-            lines.append("    out[k] = (sum > 0) ? sum : 0;")
+            lines.append("    out[k] = (sum > 0) ? sum : 0.0;")
         else:
              lines.append("    if(sum>10) out[k]=1.0; else if(sum<-10) out[k]=0.0; else out[k]=1.0/(1.0+exp(-sum));")
         lines.append("  }")

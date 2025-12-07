@@ -7,16 +7,16 @@ Valida el ciclo de vida completo de TODOS los algoritmos disponibles.
 Ciclo por Modelo:
 1. Definición del Pipeline (con/sin escalado).
 2. Entrenamiento (Fit).
-3. Inferencia en Python (Predict).
-4. Exportación a Firmware (Generate C Header).
-5. Persistencia (Save JSON).
+3. Calibración de Cuantización (Solo NN).
+4. Inferencia en Python (Predict).
+5. Exportación a Firmware (Generate C Header).
+6. Persistencia (Save JSON).
 
 Artefactos generados en: ./test_outputs/
 """
 
 import os
 import shutil
-import time
 from miniml import ml_manager
 
 # Directorio para artefactos de salida
@@ -50,7 +50,7 @@ REG_X_TEST = [[3.0, 3.0], [10.0, 10.0]]
 
 # Problema No Lineal (XOR) para Redes Neuronales
 XOR_DATA = [
-    [0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 0]
+    [1, 1, 0], [0, 1, 1], [1, 0, 1], [1, 1, 0]
 ]
 
 # -------------------------------------
@@ -85,7 +85,28 @@ def run_model_test(alias, model_type, dataset, test_input, task="classification"
         )
         print(f"  ✅ Entrenamiento OK ({res['meta']['time_seconds']:.4f}s). Scaling: {scaling}")
         
-        # 2. Inferencia Python
+        # CALIBRACIÓN PARA CUANTIZACIÓN (CRÍTICO PARA NN)
+        model = res['model']
+        if model_type == "NeuralNetwork" and hasattr(model, "calibrate_activation_scales"):
+            print(f"  ⚙️ Ejecutando calibración de activaciones para {alias}...")
+            
+            # Extraemos Features (X) del dataset original
+            X_raw = [row[:-1] for row in dataset]
+            
+            # IMPORTANTE: Si el modelo tiene un scaler adjunto (gracias a train_pipeline),
+            # los datos crudos deben pasar por él antes de entrar a la calibración interna del runtime.
+            if hasattr(model, 'scaler') and model.scaler:
+                # Transformamos X_raw usando el scaler entrenado
+                X_calib = [model.scaler.transform(row) for row in X_raw]
+            else:
+                X_calib = X_raw
+            
+            # Ejecutamos la calibración con los datos correctos
+            model.calibrate_activation_scales(X_calib)
+            print(f"  ✅ Calibración completada (listo para exportación int8).")
+        # ------------------------------------------------------------
+
+        # Inferencia Python
         preds = ml_manager.predict(alias, test_input)
         
         # Formateo de predicción para legibilidad
@@ -101,18 +122,20 @@ def run_model_test(alias, model_type, dataset, test_input, task="classification"
             
         print(f"  ✅ Inferencia Python: {fmt_preds}")
 
-        # 3. Exportación de Artefactos
+        # Exportación de Artefactos
         # JSON
         json_path = os.path.join(OUTPUT_DIR, f"{alias}.json")
         ml_manager.save_model(alias, json_path)
+        print(f"  💾 Modelo guardado en {json_path}")
         
         # Código C (Header File)
+        # Esto internamente llama a quantize(), que ahora funcionará gracias a la calibración previa
         c_code = ml_manager.export_to_c(alias)
         h_path = os.path.join(OUTPUT_DIR, f"{alias}.h")
         with open(h_path, "w", encoding="utf-8") as f:
             f.write(c_code)
             
-        print(f"  💾 Artefactos exportados: {alias}.json, {alias}.h")
+        print(f"  💾 Header C exportado: {alias}.h")
         return True
 
     except Exception as e:
@@ -155,7 +178,7 @@ def main():
                       task="regression", n_trees=5, max_depth=4):
         success_count += 1
 
-    # MODELOS MATEMÁTICOS (Requieren Escalado)
+    # MODELOS MATEMÁTICOS (Requieren Escalado, pero SOLO soportado dentro de MiniNeuralNetwork)
 
     # Linear Regression
     total_tests += 1

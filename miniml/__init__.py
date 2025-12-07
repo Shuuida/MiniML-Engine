@@ -24,5 +24,11 @@ from .ml_runtime import (
     MiniScaler
 )
 
+# Exportar módulos completos para acceso directo desde tests
+from . import ml_manager
+from . import ml_runtime
+from . import ml_factory
+from . import ml_exporter
+
 __version__ = "1.0.0"
 __author__ = "Wilner Manzanares (Michego Takoro 'Shuuida')"

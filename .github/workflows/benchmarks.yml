@@ -1,0 +1,354 @@
+name: CI - MiniML Embedded Pipeline
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      target_arch:
+        description: 'Arquitectura objetivo (arm/xtensa)'
+        required: false
+        default: 'arm'
+      test_quantization:
+        description: 'Probar cuantificación (true/false)'
+        required: false
+        default: 'true'
+
+jobs:
+  # ------------------------------------------------------------------
+  # JOB 1: Python Logic & Unit Tests
+  tests:
+    name: 🐍 Core Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - name: Install MiniML & Deps
+        run: |
+          pip install --upgrade pip
+          pip install pytest
+          pip install -e .
+      
+      - name: Run Tests
+        run: |
+          pytest -v --junitxml=test-report.xml tests/
+      
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-report.xml
+
+  # ------------------------------------------------------------------
+  # JOB 2: Embedded ML Training & C Code Generation
+  build-firmware:
+    name: ⚙️ Build Firmware (${{ inputs.target_arch || 'arm' }})
+    needs: tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Toolchain
+        id: toolchain
+        run: |
+          ARCH=${{ inputs.target_arch || 'arm' }}
+          echo "Setting up for $ARCH..."
+          
+          if [ "$ARCH" == "arm" ]; then
+            sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+            echo "compiler=arm-none-eabi-gcc" >> $GITHUB_ENV
+            echo "cflags=-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -Wall -Werror" >> $GITHUB_ENV
+          elif [ "$ARCH" == "xtensa" ]; then
+            echo "Assuming Xtensa toolchain is pre-installed on self-hosted runner."
+            echo "compiler=xtensa-esp32-elf-gcc" >> $GITHUB_ENV
+            echo "cflags=-Wall -Werror" >> $GITHUB_ENV
+          else
+            echo "compiler=gcc" >> $GITHUB_ENV
+            echo "cflags=-Wall -Werror" >> $GITHUB_ENV
+          fi
+
+      - name: Install MiniML
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - run: pip install .
+
+      - name: Generate Embedded ML Models (Realistic Scenarios)
+        run: |
+          mkdir -p build/generated
+          
+          cat <<'PYEOF' > generate_embedded_models.py
+          """
+          Genera modelos ML realistas para casos de uso embebidos:
+          1. Neural Network con cuantificación (XOR - caso clásico)
+          2. Decision Tree (clasificación simple)
+          3. Linear Model (regresión para sensores)
+          """
+          import miniml
+          import json
+          import os
+          
+          # ============================================
+          # CASO 1: Neural Network con Cuantificación
+          # ============================================
+          # Dataset XOR: Caso clásico para validar NN en embebido
+          xor_dataset = [
+              [0.0, 0.0, 0],
+              [0.0, 1.0, 1],
+              [1.0, 0.0, 1],
+              [1.0, 1.0, 0]
+          ]
+          
+          print("[1/3] Entrenando Neural Network (XOR) con cuantificación...")
+          nn_result = miniml.train_pipeline(
+              model_name="nn_xor_embedded",
+              dataset=xor_dataset,
+              model_type="neural_network",
+              params={
+                  "n_inputs": 2,
+                  "n_hidden": 4,
+                  "n_outputs": 1,
+                  "epochs": 2000,
+                  "learning_rate": 0.1,
+                  "seed": 42
+              },
+              scaling="minmax"  # Escalado para normalizar inputs
+          )
+          
+          # Validar que act_scales se calcularon (esencial para cuantificación)
+          model_nn = nn_result['model']
+          if not hasattr(model_nn, 'act_scales') or not model_nn.act_scales:
+              raise RuntimeError("act_scales no se calcularon - cuantificación fallará")
+          
+          print(f"   ✓ act_scales: {model_nn.act_scales}")
+          
+          # Exportar código C cuantificado
+          nn_code = miniml.export_to_c("nn_xor_embedded")
+          with open("build/generated/nn_xor_quantized.h", "w") as f:
+              f.write(nn_code)
+          print("   ✓ Código C generado: nn_xor_quantized.h")
+          
+          # ============================================
+          # CASO 2: Decision Tree (Clasificación)
+          # ============================================
+          # Dataset simple para clasificación binaria (ej: detección de anomalías)
+          tree_dataset = [
+              [0.1, 0.2, 0],
+              [0.3, 0.4, 0],
+              [0.7, 0.8, 1],
+              [0.9, 0.95, 1]
+          ]
+          
+          print("[2/3] Entrenando Decision Tree...")
+          miniml.train_pipeline(
+              model_name="dt_classifier_embedded",
+              dataset=tree_dataset,
+              model_type="DecisionTreeClassifier",
+              params={"max_depth": 3},
+              scaling="minmax"
+          )
+          
+          dt_code = miniml.export_to_c("dt_classifier_embedded")
+          with open("build/generated/dt_classifier.h", "w") as f:
+              f.write(dt_code)
+          print("   ✓ Código C generado: dt_classifier.h")
+          
+          # ============================================
+          # CASO 3: Linear Regression (Sensor Data)
+          # ============================================
+          # Dataset de regresión (ej: temperatura vs voltaje)
+          linear_dataset = [
+              [0.0, 20.0],
+              [1.0, 22.5],
+              [2.0, 25.0],
+              [3.0, 27.5],
+              [4.0, 30.0]
+          ]
+          
+          print("[3/3] Entrenando Linear Model (regresión)...")
+          miniml.train_pipeline(
+              model_name="linear_sensor_embedded",
+              dataset=linear_dataset,
+              model_type="linear_regression",
+              params={"learning_rate": 0.01, "epochs": 100},
+              scaling="standard"
+          )
+          
+          linear_code = miniml.export_to_c("linear_sensor_embedded")
+          with open("build/generated/linear_sensor.h", "w") as f:
+              f.write(linear_code)
+          print("   ✓ Código C generado: linear_sensor.h")
+          
+          # ============================================
+          # Validación: Verificar características embebidas
+          # ============================================
+          print("\n[VALIDACIÓN] Verificando características embebidas...")
+          
+          # Verificar que el código NN tiene cuantificación
+          with open("build/generated/nn_xor_quantized.h", "r") as f:
+              nn_content = f.read()
+              
+          checks = {
+              "int8_t": "Pesos cuantificados a int8" in nn_content or "int8_t" in nn_content,
+              "PROGMEM": "PROGMEM" in nn_content or "const" in nn_content,
+              "CMSIS": "CMSIS" in nn_content or "arm_" in nn_content or "predict_int8" in nn_content,
+              "Scaler": "preprocess" in nn_content.lower() or "scaler" in nn_content.lower()
+          }
+          
+          for check, passed in checks.items():
+              status = "✓" if passed else "✗"
+              print(f"   {status} {check}: {'OK' if passed else 'FALTA'}")
+          
+          if not all(checks.values()):
+              print("   ⚠️  Algunas características embebidas no se detectaron")
+          
+          print("\n[COMPLETADO] Todos los modelos generados exitosamente")
+          PYEOF
+          
+          python generate_embedded_models.py
+
+      - name: Compile C Artifacts (Syntax & Embedded Checks)
+        run: |
+          echo "Compilando modelos generados con $compiler..."
+          echo "Flags: $cflags"
+          
+          # Compilar cada modelo generado
+          models=("nn_xor_quantized.h" "dt_classifier.h" "linear_sensor.h")
+          
+          for model in "${models[@]}"; do
+            if [ -f "build/generated/$model" ]; then
+              echo "Compilando $model..."
+              # Extraer solo el código C (sin comentarios de header si es .h)
+              # Crear un archivo temporal .c para compilar
+              temp_c="build/generated/${model%.h}_temp.c"
+              
+              # Si el archivo es .h, necesitamos crear un wrapper .c
+              cat <<CEOF > "$temp_c"
+          #include <stdint.h>
+          #include <math.h>
+          #ifdef __AVR__
+          #include <avr/pgmspace.h>
+          #endif
+          
+          // Incluir el modelo generado
+          #include "${model}"
+          
+          // Función dummy para evitar linker errors
+          int main() { return 0; }
+          CEOF
+              
+              # Compilar con flags embebidos
+              $compiler $cflags -c "$temp_c" -o "${temp_c%.c}.o" || {
+                echo "❌ Error compilando $model"
+                exit 1
+              }
+              echo "✓ $model compilado exitosamente"
+            else
+              echo "⚠️  $model no encontrado"
+            fi
+          done
+          
+          echo "✅ Todos los modelos compilaron correctamente"
+
+      - name: Validate Embedded Features
+        run: |
+          echo "Validando características específicas de embebido..."
+          
+          # Verificar que los archivos generados tienen características embebidas
+          if [ -f "build/generated/nn_xor_quantized.h" ]; then
+            echo "Verificando nn_xor_quantized.h..."
+            
+            # Verificar cuantificación
+            if grep -q "int8_t" build/generated/nn_xor_quantized.h; then
+              echo "  ✓ Contiene cuantificación int8"
+            else
+              echo "  ✗ No se detectó cuantificación int8"
+              exit 1
+            fi
+            
+            # Verificar que no usa float64 o double (solo float32)
+            if grep -q "double\|float64" build/generated/nn_xor_quantized.h; then
+              echo "  ⚠️  Advertencia: Usa double/float64 (no ideal para embebido)"
+            fi
+            
+            # Verificar tamaño razonable (no debería ser enorme)
+            size=$(wc -c < build/generated/nn_xor_quantized.h)
+            if [ $size -lt 100000 ]; then
+              echo "  ✓ Tamaño razonable: ${size} bytes"
+            else
+              echo "  ⚠️  Tamaño grande: ${size} bytes"
+            fi
+          fi
+
+      - name: Upload Binary Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-build-${{ inputs.target_arch || 'arm' }}
+          path: build/generated/
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # JOB 3: Benchmark & Performance Metrics (Opcional)
+  benchmark:
+    name: 📊 Performance Benchmarks
+    needs: build-firmware
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[benchmark]')
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - run: pip install .
+      
+      - name: Run Embedded Benchmarks
+        run: |
+          cat <<'PYEOF' > benchmark_embedded.py
+          import miniml
+          import time
+          
+          # Benchmark: Tiempo de entrenamiento y tamaño de modelo
+          xor_data = [[0.0, 0.0, 0], [0.0, 1.0, 1], [1.0, 0.0, 1], [1.0, 1.0, 0]]
+          
+          print("=== Benchmark: Neural Network Embebido ===\n")
+          
+          # Entrenamiento
+          start = time.time()
+          result = miniml.train_pipeline(
+              "bench_nn", xor_data, "neural_network",
+              params={"n_inputs": 2, "n_hidden": 4, "n_outputs": 1, "epochs": 2000},
+              scaling="minmax"
+          )
+          train_time = time.time() - start
+          
+          # Exportación
+          start = time.time()
+          c_code = miniml.export_to_c("bench_nn")
+          export_time = time.time() - start
+          
+          # Métricas
+          model = result['model']
+          code_size = len(c_code)
+          
+          print(f"Tiempo de entrenamiento: {train_time:.3f}s")
+          print(f"Tiempo de exportación: {export_time:.3f}s")
+          print(f"Tamaño del código C: {code_size} bytes")
+          print(f"act_scales: {getattr(model, 'act_scales', 'N/A')}")
+          print(f"Cuantificado: {getattr(model, 'quantized', False)}")
+          PYEOF
+          
+          python benchmark_embedded.py

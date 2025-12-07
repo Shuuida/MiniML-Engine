@@ -15,7 +15,13 @@ import time
 import os
 import importlib
 from .ml_compat import _flatten_tree_to_arrays
-from .ml_factory import ml_factory
+
+# Importación de ml_factory con fallback
+try:
+    from . import ml_factory
+except ImportError:
+    # Fallback para ejecución local sin paquete
+    import ml_factory
 
 # Opcional: importar _MODEL_REGISTRY desde ml_manager
 try:
@@ -38,7 +44,7 @@ except Exception:
 _EXPORT_LOG: List[str] = []
 
 
-# ============================
+# ------------------------
 # UTILIDADES INTERNAS
 
 def _log(msg: str):
@@ -57,7 +63,10 @@ def export_struct_to_json_file(struct_data: Dict[str, Any], path: str, *,
     Guarda la estructura ML como un archivo JSON exportable.
     Incluye trazas internas del proceso.
     """
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Crear directorio si no existe (solo si hay un directorio en la ruta)
+    dir_path = os.path.dirname(path)
+    if dir_path:  # Solo crear si hay un directorio (no cadena vacía)
+        os.makedirs(dir_path, exist_ok=True)
 
     with open(path, "w", encoding="utf-8") as f:
         if pretty:
@@ -67,7 +76,7 @@ def export_struct_to_json_file(struct_data: Dict[str, Any], path: str, *,
     _log(f"Estructura ML exportada correctamente a {path}")
 
 
-# ============================
+# -------------------------
 # EXPORTACIÓN DE MODELOS
 
 def export_model_snapshot(model_name: str, *,
@@ -130,7 +139,7 @@ def export_model_snapshot(model_name: str, *,
     _log(f"Snapshot de modelo '{model_name}' exportado a {filename}")
     return filename
 
-# ============================================================
+# -----------------------------------------------------------------
 # SERIALIZACIÓN Y DESERIALIZACIÓN DE MODELOS (MiniML / sklearn)
 
 def serialize_model(model_obj, metadata=None):
@@ -169,7 +178,6 @@ def serialize_model(model_obj, metadata=None):
             data["repr"] = f"{type(model_obj).__name__} - MiniML structure"
             return data
 
-        # NUEVOS MODELOS MINI ML
         elif hasattr(model_obj, "coefficients") and hasattr(model_obj, "intercept"):
             data["framework"] = "MiniML"
             data["type"] = "MiniLinearModel"
@@ -184,18 +192,42 @@ def serialize_model(model_obj, metadata=None):
             data["kernel"] = getattr(model_obj, "kernel", "linear")
             data["weights"] = getattr(model_obj, "weights", [])
             data["bias"] = getattr(model_obj, "bias", 0.0)
-            data["support_vectors"] = getattr(model_obj, "support_vectors", []) # <-- AÑADIDO
+            data["support_vectors"] = getattr(model_obj, "support_vectors", []) 
             data["repr"] = "MiniSVM - MiniML"
             return data
 
-        elif hasattr(model_obj, "layers") and hasattr(model_obj, "weights"):
+        elif hasattr(model_obj, "W1") and hasattr(model_obj, "n_hidden"):
             data["framework"] = "MiniML"
             data["type"] = "MiniNeuralNetwork"
-            data["layers"] = getattr(model_obj, "layers", [])
-            data["weights"] = getattr(model_obj, "weights", [])
-            data["biases"] = getattr(model_obj, "biases", [])
-            data["activations"] = getattr(model_obj, "activations", []) # <-- AÑADIDO
-            data["repr"] = "MiniNeuralNetwork - MiniML"
+            data["W1"] = getattr(model_obj, "W1", [])
+            data["W2"] = getattr(model_obj, "W2", [])
+            data["B1"] = getattr(model_obj, "B1", [])
+            data["B2"] = getattr(model_obj, "B2", [])
+            
+            data["config"] = {
+                "n_inputs": getattr(model_obj, "n_inputs", 0),
+                "n_hidden": getattr(model_obj, "n_hidden", 0),
+                "n_outputs": getattr(model_obj, "n_outputs", 0),
+                "hidden_activation": getattr(model_obj, "hidden_activation", "sigmoid"),
+                "output_activation": getattr(model_obj, "output_activation", "sigmoid")
+            }
+            
+            # Guardar act_scales si existen
+            if hasattr(model_obj, "act_scales"):
+                data["act_scales"] = model_obj.act_scales
+
+            data["repr"] = "MiniNeuralNetwork (MLP) - MiniML"
+            return data
+
+        # KNN (K-Nearest Neighbors)
+        elif hasattr(model_obj, "X_train") and hasattr(model_obj, "k"):
+            data["framework"] = "MiniML"
+            data["type"] = "KNearestNeighbors"
+            data["k"] = getattr(model_obj, "k", 3)
+            data["task"] = getattr(model_obj, "task", "classification")
+            data["X_train"] = getattr(model_obj, "X_train", [])
+            data["y_train"] = getattr(model_obj, "y_train", [])
+            data["repr"] = f"KNearestNeighbors(k={data['k']}) - MiniML"
             return data
 
 
@@ -223,7 +255,7 @@ def deserialize_model(data):
         if framework == "sklearn":
             from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
             
-            # CORRECCIÓN: Extraemos la representación del modelo
+            # Extraemos la representación del modelo
             model_repr = data.get("repr", "")
             params = data.get("params", {})
 
@@ -264,7 +296,19 @@ def deserialize_model(data):
                 except ValueError:
                     # Fallback manual si el factory falla o el tipo es muy custom
                     pass
-
+            
+            # KNN (K-Nearest Neighbors)
+            elif "knearest" in model_type or "knn" in model_type:
+                k = data.get("k", 3)
+                task = data.get("task", "classification")
+                model = ml_runtime.KNearestNeighbors(k=k, task=task)
+                model.X_train = data.get("X_train", [])
+                model.y_train = data.get("y_train", [])
+                # Restauración de metadata dimensional
+                if model.X_train and len(model.X_train) > 0:
+                    model.n_features_trained = len(model.X_train[0])
+                return model
+            
             # LinearRegression
             elif "linear" in model_type or "regression" in model_type:
                 model = ml_runtime.MiniLinearModel() 
@@ -281,12 +325,28 @@ def deserialize_model(data):
                 return model
 
             # Neural Network
-            elif "neural" in model_type or "network" in model_type:
-                model = ml_runtime.MiniNeuralNetwork() 
-                model.weights = data.get("weights", [])
-                model.biases = data.get("biases", [])
-                model.activations = data.get("activations", [])
-                model.layers = data.get("layers", [])
+            elif "neural" in data.get("type", "").lower() or "network" in data.get("type", "").lower():
+                # Recuperar configuración para instanciar correctamente
+                config = data.get("config", {})
+                
+                model = ml_runtime.MiniNeuralNetwork(
+                    n_inputs=config.get("n_inputs", 1),
+                    n_hidden=config.get("n_hidden", 1),
+                    n_outputs=config.get("n_outputs", 1)
+                )
+                
+                # Restaurar Pesos
+                model.W1 = data.get("W1", [])
+                model.W2 = data.get("W2", [])
+                model.B1 = data.get("B1", [])
+                model.B2 = data.get("B2", [])
+                
+                # Restaurar Activaciones
+                model.hidden_activation = config.get("hidden_activation", "sigmoid")
+                model.output_activation = config.get("output_activation", "sigmoid")
+                
+                model.act_scales = data.get("act_scales", {})
+                
                 return model
 
         return {"framework": framework or "unknown", "repr": repr(data)}
@@ -294,7 +354,7 @@ def deserialize_model(data):
     except Exception as e:
         raise RuntimeError(f"Error deserializando modelo: {e}")
 
-# ============================================================
+# ---------------------------------------------------------------
 # EXTRACTOR DE ESTRUCTURAS DE MODELOS (para visualización y exportación)
 
 def extract_model_structure(model_obj):
@@ -315,7 +375,6 @@ def extract_model_structure(model_obj):
                 "framework": "MiniML",
                 "type": "RandomForest" if hasattr(model_obj, "trees") else "DecisionTree",
             }
-            # CORRECCIÓN
             # Aplanar los árboles a arrays compatibles con C
             if hasattr(model_obj, "trees"):
                 struct["tree_structs"] = [] # Usar el mismo nombre que en serialize_model
@@ -334,6 +393,21 @@ def extract_model_structure(model_obj):
             return struct
         
         model_type = str(type(model_obj)).split(".")[-1].replace("'>", "").lower()
+
+
+        # MiniML KNN (K-Nearest Neighbors) - Integración Fiel
+        if "knearest" in model_type or "knn" in model_type:
+            struct = {
+                "framework": "MiniML",
+                "type": "KNearestNeighbors",
+                "k": getattr(model_obj, "k", 3),
+                "task": getattr(model_obj, "task", "classification"),
+                "n_samples": len(model_obj.X_train) if hasattr(model_obj, "X_train") and model_obj.X_train else 0,
+                "n_features": len(model_obj.X_train[0]) if hasattr(model_obj, "X_train") and model_obj.X_train else 0,
+                "X_train": getattr(model_obj, "X_train", []),
+                "y_train": getattr(model_obj, "y_train", [])
+            }
+            return struct
 
         # MiniML SVM
         if "svm" in model_type:
@@ -359,16 +433,27 @@ def extract_model_structure(model_obj):
             return struct
 
         # MiniML Neural Network
+        model_type = str(type(model_obj)).lower()
         if "neural" in model_type or "network" in model_type:
             struct = {
                 "framework": "MiniML",
                 "type": "NeuralNetwork",
-                "layers": getattr(model_obj, "layers", []),
-                "weights": getattr(model_obj, "weights", []),
-                "biases": getattr(model_obj, "biases", []),
-                "activation": getattr(model_obj, "activation", "relu"),
+                "W1": getattr(model_obj, "W1", []),
+                "W2": getattr(model_obj, "W2", []),
+                "B1": getattr(model_obj, "B1", []),
+                "B2": getattr(model_obj, "B2", []),
+                # Metadata útil
+                "config": {
+                    "n_inputs": getattr(model_obj, "n_inputs", 0),
+                    "n_hidden": getattr(model_obj, "n_hidden", 0),
+                    "n_outputs": getattr(model_obj, "n_outputs", 0)
+                },
                 "trained_at": getattr(model_obj, "trained_at", None),
             }
+            # Incluir escalas si existen (útil para debug visual)
+            if hasattr(model_obj, "act_scales"):
+                struct["calibration"] = model_obj.act_scales
+                
             return struct
 
         try:
