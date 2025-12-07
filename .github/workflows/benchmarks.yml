@@ -46,7 +46,7 @@ jobs:
           pytest -v --junitxml=test-report.xml tests/
       
       - name: Upload Test Results
-        if: always()
+        if: always() 
         uses: actions/upload-artifact@v4
         with:
           name: test-results
@@ -57,7 +57,7 @@ jobs:
   build-firmware:
     name: ⚙️ Build Firmware (${{ inputs.target_arch || 'arm' }})
     needs: tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest 
     
     steps:
       - uses: actions/checkout@v4
@@ -279,31 +279,64 @@ jobs:
             echo "📦 Compilando $model_file para $target_name..."
             
             # Crear wrapper .c
+            # El código generado es código C completo, no un header, así que lo copiamos directamente
             temp_c="build/generated/${model_file%.h}_${target_name}_temp.c"
             
-            cat <<CEOF > "$temp_c"
-          #include <stdint.h>
-          #include <math.h>
-          
-          // Definir target según el compilador
-          #ifdef __AVR__
-          #include <avr/pgmspace.h>
-          #endif
-          
-          // Incluir el modelo generado
-          #include "${model_file}"
-          
-          // Función dummy para evitar linker errors
-          int main() { return 0; }
-          CEOF
+            # Verificar si el archivo ya tiene includes para evitar duplicados
+            has_stdint=$(grep -q "^#include <stdint.h>" "build/generated/$model_file" && echo "yes" || echo "no")
+            has_math=$(grep -q "^#include <math.h>" "build/generated/$model_file" && echo "yes" || echo "no")
+            has_avr=$(grep -q "^#include <avr/pgmspace.h>" "build/generated/$model_file" && echo "yes" || echo "no")
             
-            # Compilar
-            if $compiler $cflags -c "$temp_c" -o "${temp_c%.c}.o" 2>&1; then
+            {
+              echo "// Wrapper para compilación de ${model_file} para ${target_name}"
+              echo ""
+              
+              # Agregar includes solo si no están ya presentes
+              if [ "$has_stdint" == "no" ]; then
+                echo "#include <stdint.h>"
+              fi
+              if [ "$has_math" == "no" ]; then
+                echo "#include <math.h>"
+              fi
+              
+              # Para AVR, asegurar que __AVR__ esté definido y avr/pgmspace.h incluido
+              if [ "$target_name" == "AVR (Arduino)" ]; then
+                if [ "$has_avr" == "no" ]; then
+                  echo "#define __AVR__"
+                  echo "#include <avr/pgmspace.h>"
+                fi
+              fi
+              
+              echo ""
+              echo "// ========================================"
+              echo "// Código del modelo generado:"
+              echo "// ========================================"
+              # Leer el contenido del archivo .h y copiarlo (no incluirlo)
+              cat "build/generated/$model_file"
+              echo ""
+              echo "// ========================================"
+              echo "// Función dummy para evitar linker errors"
+              echo "// ========================================"
+              echo "int main() { return 0; }"
+            } > "$temp_c"
+            
+            # Validar que el archivo temporal se creó correctamente
+            if [ ! -f "$temp_c" ]; then
+              echo "  ❌ No se pudo crear el archivo temporal $temp_c"
+              return 1
+            fi
+            
+            # Mostrar primeras líneas del archivo para debugging (solo si falla)
+            if ! $compiler $cflags -c "$temp_c" -o "${temp_c%.c}.o" 2>&1; then
+              echo "  ❌ Error compilando $model_file para $target_name"
+              echo "  📄 Primeras 20 líneas del código generado:"
+              head -n 20 "$temp_c" | sed 's/^/    /'
+              echo "  📄 Últimas 10 líneas del código generado:"
+              tail -n 10 "$temp_c" | sed 's/^/    /'
+              return 1
+            else
               echo "  ✅ $model_file compilado exitosamente para $target_name"
               return 0
-            else
-              echo "  ❌ Error compilando $model_file para $target_name"
-              return 1
             fi
           }
           
