@@ -36,4 +36,4 @@ faster-training = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["miniml*"]
+include = ["miniml*", "estimators*", "adapters*"]

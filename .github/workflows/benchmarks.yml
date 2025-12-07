@@ -37,6 +37,10 @@ jobs:
           pip install pytest
           pip install -e .
       
+      - name: Verify Package Installation
+        run: |
+          python -c "import miniml; import estimators; import adapters; print('✓ All packages imported successfully')"
+      
       - name: Run Tests
         run: |
           pytest -v --junitxml=test-report.xml tests/
