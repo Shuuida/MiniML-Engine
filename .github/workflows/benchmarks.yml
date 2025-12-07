@@ -436,6 +436,45 @@ jobs:
           [ "$AVR_TOOLCHAIN" == "installed" ] && echo "  ✓ AVR (Arduino Uno/Nano)"
           echo "=========================================="
 
+
+      - name: Run Static Benchmarks (Size Analysis)
+        run: |
+          SIZE_TOOL="$compiler"
+          SIZE_TOOL="${SIZE_TOOL/gcc/size}" 
+            
+          echo "Running benchmarks with $SIZE_TOOL..."
+            
+          
+          $SIZE_TOOL build/generated/model.o > build/generated/benchmark_report.txt
+            
+          
+          cat build/generated/benchmark_report.txt
+            
+          
+          echo "### 📊 MiniML Model Performance (Static)" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: **${{ inputs.target_arch || 'arm' }}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Section | Size (Bytes) | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :---: | :--- |" >> $GITHUB_STEP_SUMMARY
+            
+          TEXT=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $1}')
+          DATA=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $2}')
+          BSS=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $3}')
+          DEC=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $4}')
+            
+          echo "| **Flash (.text)** | $TEXT | Code instructions + Constants |" >> $GITHUB_STEP_SUMMARY
+          echo "| **RAM (.data)** | $DATA | Initialized variables |" >> $GITHUB_STEP_SUMMARY
+          echo "| **RAM (.bss)** | $BSS | Variables starting at zero |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Total Size** | **$DEC** | Total footprint |" >> $GITHUB_STEP_SUMMARY
+  
+      - name: Upload Binary Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-build-${{ inputs.target_arch || 'arm' }}
+          path: |
+            build/generated/
+            build/generated/benchmark_report.txt
+
       - name: Validate Embedded Features
         run: |
           echo "Validando características específicas de embebido..."
