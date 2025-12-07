@@ -312,13 +312,22 @@ jobs:
               echo "// Código del modelo generado:"
               echo "// ========================================"
               # Leer el contenido del archivo .h y copiarlo (no incluirlo)
-              cat "build/generated/$model_file"
+              # Filtrar líneas vacías al final que puedan causar problemas
+              cat "build/generated/$model_file" | sed '/^$/d' | sed -e :a -e '/^\n*$/d;N;ba'
               echo ""
               echo "// ========================================"
               echo "// Función dummy para evitar linker errors"
               echo "// ========================================"
               echo "int main() { return 0; }"
             } > "$temp_c"
+            
+            # Validar sintaxis básica: contar llaves abiertas y cerradas
+            open_braces=$(grep -o '{' "$temp_c" | wc -l)
+            close_braces=$(grep -o '}' "$temp_c" | wc -l)
+            if [ "$open_braces" -ne "$close_braces" ]; then
+              echo "  ⚠️  Advertencia: Desbalance de llaves (abiertas: $open_braces, cerradas: $close_braces)"
+              echo "  → Intentando compilar de todas formas..."
+            fi
             
             # Validar que el archivo temporal se creó correctamente
             if [ ! -f "$temp_c" ]; then

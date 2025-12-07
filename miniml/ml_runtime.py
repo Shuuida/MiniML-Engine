@@ -1274,8 +1274,8 @@ class MiniScaler:
                 r_min, r_max = self.feature_range
                 scale = r_max - r_min
                 code.append(f"    row[i] = row[i] * {scale} + {r_min};")
-            code.append("  }}")
-            code.append("}")
+            code.append("  }")  # Cerrar for loop (una llave)
+            code.append("}")    # Cerrar función
             
         elif self.method == 'standard':
             means = [p['mean'] for p in self.params]
@@ -1288,8 +1288,8 @@ class MiniScaler:
             code.append(f"    float mu = pgm_read_float(&{fn_name}_mean[i]);")
             code.append(f"    float sig = pgm_read_float(&{fn_name}_std[i]);")
             code.append(f"    row[i] = (row[i] - mu) / sig;")
-            code.append("  }}")
-            code.append("}")
+            code.append("  }")  # Cerrar for loop (una llave)
+            code.append("}")    # Cerrar función
 
         return "\n".join(code)
 
