@@ -72,6 +72,7 @@ jobs:
           if [ "$ARCH" == "arm" ] || [ "$ARCH" == "all" ]; then
             sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
             echo "compiler_arm=arm-none-eabi-gcc" >> $GITHUB_ENV
+            echo "size_tool=arm-none-eabi-size" >> $GITHUB_ENV
             echo "cflags_arm=-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -Wall -Werror" >> $GITHUB_ENV
             echo "ARM_TOOLCHAIN=installed" >> $GITHUB_ENV
           fi
@@ -89,6 +90,7 @@ jobs:
           if [ "$ARCH" == "xtensa" ]; then
             echo "Assuming Xtensa toolchain is pre-installed on self-hosted runner."
             echo "compiler_xtensa=xtensa-esp32-elf-gcc" >> $GITHUB_ENV
+            echo "size_tool=xtensa-esp32-elf-size" >> $GITHUB_ENV
             echo "cflags_xtensa=-Wall -Werror" >> $GITHUB_ENV
           fi
 
@@ -439,29 +441,35 @@ jobs:
 
       - name: Run Static Benchmarks (Size Analysis)
         run: |
-          SIZE_TOOL="$compiler"
-          SIZE_TOOL="${SIZE_TOOL/gcc/size}" 
-            
-          echo "Running benchmarks with $SIZE_TOOL..."
-            
+          SIZE_TOOL="$size_tool"
           
+          if [ -z "$SIZE_TOOL" ]; then
+            echo "Error: size_tool variable is empty."
+            exit 1
+          fi
+          
+          echo "Running benchmarks with: $SIZE_TOOL"
+        
+          if [ ! -f "build/generated/model.o" ]; then
+             echo "Error: build/generated/model.o not found!"
+             exit 1
+          fi
+
           $SIZE_TOOL build/generated/model.o > build/generated/benchmark_report.txt
-            
-          
+        
           cat build/generated/benchmark_report.txt
-            
           
           echo "### 📊 MiniML Model Performance (Static)" >> $GITHUB_STEP_SUMMARY
           echo "Architecture: **${{ inputs.target_arch || 'arm' }}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Section | Size (Bytes) | Description |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :---: | :--- |" >> $GITHUB_STEP_SUMMARY
-            
+          
           TEXT=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $1}')
           DATA=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $2}')
           BSS=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $3}')
           DEC=$(tail -n 1 build/generated/benchmark_report.txt | awk '{print $4}')
-            
+          
           echo "| **Flash (.text)** | $TEXT | Code instructions + Constants |" >> $GITHUB_STEP_SUMMARY
           echo "| **RAM (.data)** | $DATA | Initialized variables |" >> $GITHUB_STEP_SUMMARY
           echo "| **RAM (.bss)** | $BSS | Variables starting at zero |" >> $GITHUB_STEP_SUMMARY
