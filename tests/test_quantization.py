@@ -16,11 +16,15 @@ def test_quantization_workflow():
     nn.hidden_activation = 'relu' 
     nn.output_activation = 'relu' # Usamos ReLU en salida para test simple (0 a 1+)
     
-    nn.fit([x + yi for x, yi in zip(X, y)])
+    dataset = [x + yi for x, yi in zip(X, y)]
+    nn.fit(dataset)
     
     # 2. CALIBRACIÓN
-    print("\n[2] Calibrando...")
-    nn.calibrate_activation_scales(X)
+    # Nota: calibrate() se llama automáticamente después de fit() (línea 988 en ml_runtime.py)
+    # Verificamos que act_scales se haya calculado correctamente
+    print("\n[2] Verificando calibración...")
+    if not hasattr(nn, 'act_scales') or not nn.act_scales:
+        raise RuntimeError("act_scales no se calcularon automáticamente después de fit()")
     print(f"   Escalas: {nn.act_scales}")
 
     # 3. CUANTIFICACIÓN
