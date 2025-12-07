@@ -155,20 +155,23 @@ jobs:
           # Exportar código C cuantificado (intentará CMSISAdapter primero)
           nn_code = miniml.export_to_c("nn_xor_embedded")
           
-          # Detectar tipo de código generado
-          is_cmsis = "CMSIS" in nn_code or "arm_fully_connected_s8" in nn_code or "predict_int8" in nn_code
-          is_avr = "avr/pgmspace.h" in nn_code or "PROGMEM" in nn_code
+          # Detectar tipo de código generado (verificación estricta)
+          is_cmsis = ("CMSIS" in nn_code or "arm_fully_connected_s8" in nn_code or 
+                     "predict_int8" in nn_code) and "avr/pgmspace.h" not in nn_code
+          is_avr = "avr/pgmspace.h" in nn_code or ("PROGMEM" in nn_code and "CMSIS" not in nn_code)
           
           if is_cmsis:
               print("   ✓ Código generado con CMSISAdapter (compatible ARM Cortex-M)")
               with open("build/generated/nn_xor_arm.h", "w") as f:
                   f.write(nn_code)
-              print("   ✓ Guardado como: nn_xor_arm.h")
+              print("   ✓ Guardado como: nn_xor_arm.h (ARM)")
           elif is_avr:
               print("   ✓ Código generado para AVR/Arduino (PROGMEM)")
               with open("build/generated/nn_xor_avr.h", "w") as f:
                   f.write(nn_code)
-              print("   ✓ Guardado como: nn_xor_avr.h")
+              print("   ✓ Guardado como: nn_xor_avr.h (AVR)")
+          else:
+              print("   ⚠️  Tipo de código no determinado claramente")
           
           # Guardar también con nombre genérico
           with open("build/generated/nn_xor_quantized.h", "w") as f:
@@ -311,17 +314,44 @@ jobs:
             echo ""
             echo "🎯 === COMPILACIÓN ARM CORTEX-M4 ==="
             
-            # Intentar compilar código ARM (CMSIS) si existe
+            # Función para verificar si un archivo es código ARM (no AVR)
+            is_arm_code() {
+              local file=$1
+              if [ ! -f "build/generated/$file" ]; then
+                return 1
+              fi
+              # Si tiene avr/pgmspace.h sin protección, NO es ARM
+              if grep -q "^#include <avr/pgmspace.h>" "build/generated/$file"; then
+                return 1
+              fi
+              # Si tiene CMSIS o predict_int8, SÍ es ARM
+              if grep -q "CMSIS\|arm_fully_connected_s8\|predict_int8" "build/generated/$file"; then
+                return 0
+              fi
+              # Si NO tiene avr/pgmspace.h, puede ser ARM
+              if ! grep -q "avr/pgmspace.h\|PROGMEM" "build/generated/$file"; then
+                return 0
+              fi
+              return 1
+            }
+            
+            # Intentar compilar código ARM (CMSIS) si existe y es realmente ARM
             if [ -f "build/generated/nn_xor_arm.h" ]; then
-              compile_model "nn_xor_arm.h" "$compiler_arm" "$cflags_arm" "ARM Cortex-M4"
+              if is_arm_code "nn_xor_arm.h"; then
+                compile_model "nn_xor_arm.h" "$compiler_arm" "$cflags_arm" "ARM Cortex-M4"
+              else
+                echo "  ⚠️  nn_xor_arm.h contiene código AVR, saltando compilación ARM"
+              fi
             fi
             
             # Compilar otros modelos que no sean AVR específicos
             for model in "dt_classifier.h" "linear_sensor.h"; do
               if [ -f "build/generated/$model" ]; then
                 # Solo compilar si NO es código AVR específico
-                if ! grep -q "^#include <avr/pgmspace.h>" "build/generated/$model"; then
+                if is_arm_code "$model"; then
                   compile_model "$model" "$compiler_arm" "$cflags_arm" "ARM Cortex-M4"
+                else
+                  echo "  ⚠️  $model es código AVR específico, saltando compilación ARM"
                 fi
               fi
             done
