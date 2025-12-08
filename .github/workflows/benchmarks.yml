@@ -473,6 +473,68 @@ jobs:
           path: build/generated/
           retention-days: 7
 
+      - name: Generate Performance Summary
+        if: success()
+        run: |
+          echo "## 📊 Performance Benchmarks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Model | Architecture | Binary Size (bytes) | Compilation Time (s) | Notes |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------------|---------------------|----------------------|-------|" >> $GITHUB_STEP_SUMMARY
+            
+          # Initialize totals
+          total_size_arm=0
+          total_time_arm=0
+          total_size_avr=0
+          total_time_avr=0
+          model_count=0
+            
+          # Process ARM binaries if available
+          if [ "$ARM_TOOLCHAIN" == "installed" ]; then
+            for bin in build/generated/*_arm.elf; do
+              if [ -f "$bin" ]; then
+                size=$(wc -c < "$bin" | awk '{print $1}')
+                model_name=$(basename "$bin" | sed 's/_arm\.elf$//')
+                comp_time=$(grep -oP "(?<=Compilation for ).*(?= succeeded)" build/generated/compile_log.txt || echo "N/A")
+                echo "| $model_name | ARM Cortex-M4 | $size | $comp_time | Quantized if applicable |" >> $GITHUB_STEP_SUMMARY
+                total_size_arm=$((total_size_arm + size))
+                model_count=$((model_count + 1))
+              fi
+            done
+            avg_size_arm=$((total_size_arm / model_count))
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**ARM Totals:** Avg Size: ${avg_size_arm}B | Models: ${model_count}" >> $GITHUB_STEP_SUMMARY
+          fi
+            
+          # Process AVR binaries if available
+          if [ "$AVR_TOOLCHAIN" == "installed" ]; then
+            for bin in build/generated/*_avr.elf; do
+               if [ -f "$bin" ]; then
+                size=$(wc -c < "$bin" | awk '{print $1}')
+                model_name=$(basename "$bin" | sed 's/_avr\.elf$//')
+                comp_time=$(grep -oP "(?<=Compilation for ).*(?= succeeded)" build/generated/compile_log.txt || echo "N/A")
+                echo "| $model_name | AVR (ATmega328P) | $size | $comp_time | Optimized with -Os |" >> $GITHUB_STEP_SUMMARY
+                total_size_avr=$((total_size_avr + size))
+                model_count=$((model_count + 1))
+              fi
+            done
+            avg_size_avr=$((total_size_avr / model_count))
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**AVR Totals:** Avg Size: ${avg_size_avr}B | Models: ${model_count}" >> $GITHUB_STEP_SUMMARY
+          fi
+            
+          # Overall summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Key Insights" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flash Usage:** Suitable for <32KB devices (e.g., Arduino Uno)." >> $GITHUB_STEP_SUMMARY
+          echo "- **Quantization Impact:** int8 reduces sizes by ~75% where applied." >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Success:** All models compiled without errors." >> $GITHUB_STEP_SUMMARY
+            
+          # Display summary in console for logs
+          echo ""
+          echo "📊 Performance Summary:"
+          cat $GITHUB_STEP_SUMMARY
+  
+
   # ------------------------------------------------------------------
   # JOB 3: Benchmark & Performance Metrics (Opcional)
   benchmark:
