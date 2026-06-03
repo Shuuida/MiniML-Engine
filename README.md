@@ -1,51 +1,83 @@
-# **🧠 MiniML Framework Documentation**
+<p align="center">
+  <img src="assets/miniml_banner.png" alt="MiniML Engine Banner" width="850">
+</p>
 
-**Version:** 1.0.0
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.7%2B-blue.svg?style=flat-square&logo=python&logoColor=white" alt="Python Version"></a>
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-red.svg?style=flat-square" alt="License: Apache 2.0"></a>
+  <img src="https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg?style=flat-square" alt="Zero Dependencies">
+  <img src="https://img.shields.io/badge/C%2B%2B-PROGMEM%20Ready-orange.svg?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++ Ready">
+  <img src="https://img.shields.io/badge/Platform-Arduino%20%7C%20ESP32%20%7C%20STM32-lightgrey.svg?style=flat-square" alt="Supported Platforms">
+  <img src="https://img.shields.io/badge/Edge%20AI-Deep%20Learning-purple.svg?style=flat-square" alt="Edge AI Deep Learning">
+</p>
 
-**Architecture:** Zero-Dependency Python Core \+ C Export for Embedded Systems
+---
+
+# **🧠 MiniML Engine (Powered by MiniTensor)**
+
+**Version:** 1.1.0 - *Industrial Edge AI Release* 
+**Architecture:** Zero-Dependency Python Core + Autograd Engine + Native C++ Export (PROGMEM)
 
 **Philosophy:** "Train on PC, Run on Metal"
 
-**Author:** "Wilner Manzanares (Michego Takoro 'Shuuida')"
+**Author:** Wilner Manzanares (Michego Takoro 'Shuuida')
 
 ---
 
 ## **📋 Overview**
 
-**MiniML** is a lightweight Machine Learning framework explicitly engineered for low-cost embedded systems (Arduino, ESP32, STM32). Unlike traditional frameworks that rely on heavy libraries like NumPy or Pandas, MiniML is built from scratch using pure Python to ensure total transparency and compatibility with the C code it generates.
+**MiniML Engine** is an industrial-grade Machine Learning and Deep Learning framework explicitly designed for **extreme low-cost, resource-constrained embedded systems** (Arduino, ESP32, STM32, 8-bit AVR microcontrollers).
+
+Defying industry standards, MiniML operates with **zero external dependencies**. No NumPy, no SciPy, no PyTorch, and no TensorFlow. The entire ecosystem—from linear algebra and decision trees to the N-Dimensional computational graph and Backpropagation—is written in pure Python.
+
+This architecture guarantees absolute transparency and enables a mathematically perfect (1:1) translation into static, optimized C++ code tailored to run on microcontrollers with **less than 2KB of RAM**.
 
 ### **Core Value Proposition (USP)**
 
-* **🚫 Zero Dependencies:** No numpy, scipy, or pandas. Runs on any standard Python interpreter (including legacy systems).  
-* **⚡ Embedded Optimization:** Algorithms are reverse-engineered to run on hardware with \< 2KB RAM.  
-* **🔄 Dual-Core Engine:** Automatically accelerates training using scikit-learn (OPTIONAL) if installed on the host PC, falling back to the pure Python ml\_runtime otherwise.
+* **🚫 Zero-Dependency Core & Autograd:** Train everything from simple linear regressions to deep neural networks using only the Python standard library.
+* **⚡ Extreme Optimization (SRAM < 2KB):** Algorithms are reverse-engineered to flatten dynamic structures and avoid recursion. Aggressive use of Flash memory (`PROGMEM`).
+* **🧠 Hybrid INT8 Quantization:** Converts 32-bit float weights into 8-bit integers for storage, de-quantizing on-the-fly during inference to maintain mathematical precision.
+* **📦 Industrial Packaging:** Exports native libraries with dual manifests (`library.json` and `library.properties`), ready to be compiled in **PlatformIO** and **Arduino IDE**.
 
-## **📂 Modular Architecture Analysis**
+---
 
-The framework operates through five cohesive modules, each respecting the Separation of Concerns (SoC) principle.
+## **📂 Model Ecosystem: Legacy ML & Deep Learning**
 
-### **1\. ml\_runtime.py (The Mathematical Core)**
+MiniML Engine features two distinct inference engines, allowing the software architect to choose the perfect approach based on the task's complexity and the hardware's constraints.
 
-This is the engine room. It contains the pure Python implementations of ML algorithms. Every line of code here is written to mathematically mirror the C code that will run on the microcontroller.
+### **1. Classic MiniML (Legacy Machine Learning)**
 
-**Key Features:**
+Located in `ml_runtime.py`, this engine is the core for tabular data and simple analog signals. It is ideal for low-frequency sensors where a neural network would be a waste of clock cycles.
 
-* **MiniMatrixOps:** A custom linear algebra class that replaces NumPy. It handles dot products, transpositions, and matrix multiplications using native Python lists.  
-* **Iterative Design:** Algorithms are designed to avoid deep recursion, preventing Stack Overflow on microcontrollers.
+| Model Class | Algorithm & Edge Optimization (C++) |
+| --- | --- |
+| **`DecisionTreeClassifier`** | *CART (Gini Impurity)*. Trees are flattened into linear arrays (`feature_index`, `threshold`) to allow **O(1)** stack usage via continuous `while` loops. |
+| **`RandomForestClassifier`** | *Bagging*. Generates independent C functions stored in Flash memory for each tree and a lightweight **Majority Vote** function in SRAM. |
+| **`MiniLinearModel`** | *SGD*. Uses iterative updates. Exports a simple float array for ultra-fast dot-product inference. |
+| **`MiniSVM`** | *Hinge Loss*. Implements a linear decision boundary, perfect for binary classification on hardware lacking a dedicated Floating-Point Unit (FPU). |
+| **`KNearestNeighbors`** | *Lazy Learning*. Exports the entire dataset to Flash memory. Implements an in-place *Insertion Sort* simulating a priority queue to avoid exhausting dynamic RAM. |
+| **`MiniScaler`** | *Preprocessing*. Generates MinMax/Standard normalization routines in C++ (`preprocess_data()`) to stabilize sensor signals prior to inference. |
 
-**Supported Models & Algorithms:**
+### **2. MiniTensor (Embedded Deep Learning)**
 
-| Model Class | Algorithm | Embedded Optimization (Reverse Engineering) |
-| :---- | :---- | :---- |
-| **DecisionTreeClassifier** | CART (Gini Impurity) | Trees are flattened into linear arrays (feature\_index\[\], threshold\[\]) to allow O(1) stack usage during inference via a while loop. |
-| **RandomForestClassifier** | Bagging (Bootstrap Aggregation) | Generates independent C functions for each tree and a lightweight "Majority Vote" function in C. |
-| **MiniLinearModel** | Stochastic Gradient Descent (SGD) | Uses iterative weight updates. Exports a simple float array weights\[\] for dot-product inference. |
-| **MiniSVM** | Linear SVM (Hinge Loss) | Implements a linear decision boundary perfect for binary classification on hardware with limited FPU. |
-| **MiniNeuralNetwork** | MLP (Backpropagation) | Supports **Quantization**. Can convert 32-bit float weights to 8-bit integers, reducing model size by \~75% for Flash memory storage. |
-| **KNearestNeighbors** | Euclidean Distance (Lazy) | **⚠️ Warning:** Exports the *entire* training dataset as a const C array. High Flash memory consumption. |
-| **MiniScaler** | MinMax / Standard Scaling | Records statistics (min/max/mean/std) during training to generate a C function preprocess\_data() that normalizes sensor inputs in real-time. |
+Located in the `tensor.py` and `layers.py` modules, this is the automatic differentiation (*Autograd*) engine for extracting complex features from time-series, audio, and basic computer vision.
 
-### **2\. ml\_manager.py (The Orchestrator)**
+| Layer / Module | Description & C++ Inference Optimization |
+| --- | --- |
+| **`Conv1D` & `Conv2D**` | Spatial/temporal convolutions. The exporter dynamically indexes the geometry and generates nested loops with safe memory reads using `READ_FLOAT` macros. |
+| **`SeparableConv2D`** | *MobileNet-Style*. Splits the convolution into *Depthwise* and *Pointwise* steps. Supports native **Operator Fusion** in C++ to minimize memory access and accelerate inference. |
+| **`ResidualBlock1D`** | *ResNet-Style*. Enables deep networks without vanishing gradients by adding the identity ($y = \mathcal{F}(x) + x$). Implements strict geometric indexing to align dimensions in C++. |
+| **`MaxPool1D/2D`** | Mathematical dimensionality reduction with sliding window management (Kernel/Stride). |
+| **`Flatten` & `Linear**` | Multilayer Perceptron. Supports recursive flattening of dynamic tensors (up to 4D) while maintaining the gradient flow. |
+| **Activations** | `ReLU`, `Sigmoid`, `MSELoss`, `CrossEntropyLoss`. Implemented with *Clip* barriers to prevent mathematical *Overflows* in 8-bit architectures. |
+
+---
+
+### **⚙️ System Architecture (The Pipeline Legacy)**
+
+The framework ensures the Separation of Concerns (SoC) principle through its internal managers:
+
+### **\. ml\_manager.py (The Orchestrator)**
 
 The high-level API that unifies the workflow. It acts as a bridge between the user and the raw algorithms.
 
@@ -56,7 +88,7 @@ The high-level API that unifies the workflow. It acts as a bridge between the us
   3. **Training:** Fits the selected model.  
 * **predict() Polymorphism:** Automatically handles raw input, applies the saved scaler, and runs inference.
 
-### **3\. ml\_compat.py (Safety & Compatibility)**
+### **\. ml\_compat.py (Safety & Compatibility)**
 
 The data guardian. It ensures that the dynamic nature of Python does not break the strict static nature of C.
 
@@ -64,29 +96,37 @@ The data guardian. It ensures that the dynamic nature of Python does not break t
 * **check\_dims():** strictly validates input dimensions before prediction, preventing index out-of-bounds errors in the generated C code.  
 * **impute\_missing\_values():** Ensures data integrity before it reaches the mathematical core.
 
-### **4\. ml\_factory.py (The Factory Pattern)**
+### **\. ml\_factory.py (The Factory Pattern)**
 
 Decouples model instantiation from the logic flow.
 
 * **Function:** create\_model(type\_string, params\_dict)  
 * **Purpose:** Allows the system to instantiate complex objects (like RandomForestRegressor) from simple JSON strings. This is vital for the Save/Load system and prevents circular dependencies between modules.
 
-### **5\. ml\_exporter.py (Serialization & Export)**
+### *5\. ml\_exporter.py (Serialization & Export)**
 
 Handles the persistence and translation of models.
 
 * **Structure Extraction:** Instead of using Python's pickle (which is insecure and Python-specific), this module extracts the pure mathematical structure (weights, thresholds, topology) into a language-agnostic JSON format.  
 * **Sklearn Interop:** If a model was trained using scikit-learn, this module extracts the internal NumPy arrays (tree\_.value, coef\_) and converts them into the MiniML standard format, allowing you to **export Sklearn models to Arduino C**.
 
-## **🛠️ Installation & Usage**
+---
 
-### **Installation**
+## **🛠️ Tooling & MLOps for Edge**
 
-Since MiniML is a pure Python package, installation is straightforward:
+* **Architecture Analysis (CLI):** Prints detailed summaries of the model topology, output dimensions, and trainable parameter counts in the terminal.
+* **Memory Estimator:** Mathematically projects the exact **SRAM** and **Flash memory** footprint before compilation, preventing physical microcontroller crashes.
+* **Deterministic Simulation:** The generated C++ code provides perfect mathematical parity (1:1) with the Python engine, exhaustively validated against instruction-level hardware emulators (like Wokwi).
 
-pip install miniml
+---
 
-*(Optional: Install scikit-learn for faster training on PC, but it is NOT required).*
+## **🚀 Expanded Use Cases (Industrial IoT & Robotics)**
+
+1. **Predictive Maintenance (Acoustics/Vibration):** Using `Conv1D` and `ResidualBlock1D`, a microcontroller can analyze time-windows from an accelerometer to detect anomalies in industrial motors locally (Edge Computing).
+2. **Sensor Fusion (Soft-Sensors):** By combining low-cost sensors (e.g., DHT11, LDR) and processing them through a **Random Forest** or a **Quantized MLP**, the MCU can predict complex variables without requiring an internet connection.
+3. **Tiny Vision:** Employing `SeparableConv2D`, it is possible to train pattern classifiers for low-resolution arrays (e.g., thermal or small optical cameras), drastically reducing computational load.
+
+---
 
 ### **The fit() Difference**
 
@@ -171,76 +211,143 @@ float predict(float inputs\[\]) {
   return (float)predict\_model(inputs);  
 }
 
-## **🤝 Contributing**
+---
 
-Contributions are welcome\! MiniML aims to maintain its "zero dependency" philosophy.
+## **💻 MiniTensor End-to-End Workflow Example**
 
-1. Fork the Project.  
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`).  
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`).  
-4. Push to the Branch (`git push origin feature/AmazingFeature`).  
-5. Open a Pull Request.
+From Python training to PlatformIO packaging.
+
+```python
+import miniml
+from miniml import Tensor, nn, optim
+from miniml.exporters.library_packer import LibraryPackager
+
+# 1. Define Architecture (MiniTensor Deep Learning)
+model = nn.Sequential([
+    nn.Conv1d(in_channels=1, out_channels=4, kernel_size=3, stride=1, padding=1),
+    nn.MaxPool1d(kernel_size=2),
+    nn.ResidualBlock1D(in_channels=4, out_channels=4),
+    nn.Flatten(),
+    nn.Linear(16, 1),
+    nn.Sigmoid()
+])
+
+# 2. Train on PC (Zero-Dependency Autograd Engine)
+optimizer = optim.SGD(model.parameters(), lr=0.01)
+# ... standard training loop ...
+
+# 3. Edge Optimization (Hybrid INT8 Quantization)
+model.quantize()
+
+# 4. Export to Native C++
+from miniml.exporters import cpp_writer
+cpp_code = cpp_writer.generate_cpp_code(model, input_shape=(1, 1, 8))
+
+# 5. Package Industrial Library (PlatformIO / Arduino)
+LibraryPackager.create_arduino_zip(
+    model_name="ResNet_Vibration_Detector",
+    cpp_code=cpp_code,
+    version="2.0.0",
+    quantized=True
+)
+print("ZIP library successfully generated, structured, and ready to compile on hardware!")
+
+```
 
 ---
+
+## **🛠️ Installation & Usage**
+
+### **Installation**
+
+Since MiniML is a pure Python package, installation is straightforward:
+
+pip install miniml
+
+*(Optional: Install scikit-learn for faster training on PC, but it is NOT required).*
+
+---
+
+## **🤝 Contributing**
+
+Contributions are highly welcome. MiniML's mission is to strictly maintain its "zero dependencies" philosophy and low-level optimization.
+
+1. Fork the Project.
+2. Create your Feature Branch (`git checkout -b feature/NewOptimization`).
+3. Commit your Changes (`git commit -m 'Added new feature'`).
+4. Push to the Branch (`git push origin feature/NewOptimization`).
+5. Open a Pull Request.
 
 ## **📄 License**
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Distributed under the **Apache License 2.0**. Free for academic, commercial, and industrial use, guaranteeing open-source traceability. See the `LICENSE` file for more information.
 
----
 
-# **🧠 Documentación del Framework MiniML**
+# **🧠 MiniML Engine (Powered by MiniTensor)**
 
-**Versión:** 1.0.0
+**Versión:** 1.1.0 - *Industrial Edge AI Release* 
+**Arquitectura:** Núcleo de Python (Zero-Dependency) + Motor Autograd + Exportación a C++ Nativo (PROGMEM)
 
-**Arquitectura:** Núcleo de Python con Cero Dependencias \+ Exportación a C para Sistemas Embebidos
+**Filosofía:** "Train on PC, Run on Metal"
 
-**Filosofía:** "Entrenar en PC, Ejecutar en el Hardware (Run on Metal)"
-
-**Autor:** "Wilner Manzanares (Michego Takoro 'Shuuida')"
+**Autor:** Wilner Manzanares (Michego Takoro 'Shuuida')
 
 ---
 
 ## **📋 Resumen (Overview)**
 
-**MiniML** es un framework de Machine Learning ligero, diseñado explícitamente para **sistemas embebidos de bajo costo** (Arduino, ESP32, STM32). A diferencia de los frameworks tradicionales que dependen de librerías pesadas como NumPy o Pandas, MiniML se construye desde cero utilizando **Python puro** para asegurar total transparencia y compatibilidad con el código C que genera.
+**MiniML Engine** es un framework de Machine Learning y Deep Learning diseñado explícitamente para **sistemas embebidos de bajo costo y recursos extremos** (Arduino, ESP32, STM32, AVR de 8-bits).
+
+Desafiando los estándares de la industria, MiniML opera con **cero dependencias externas**. Sin NumPy, sin SciPy, sin PyTorch ni TensorFlow. Todo el ecosistema —desde el álgebra lineal y los árboles de decisión, hasta el grafo computacional N-Dimensional y la propagación hacia atrás (*Backpropagation*)— está escrito en Python puro.
+
+Esta arquitectura garantiza una transparencia absoluta y permite una traducción matemática perfecta (1:1) hacia código C++ estático, optimizado para ejecutarse en microcontroladores con **menos de 2KB de RAM**.
 
 ### **Propuesta de Valor Principal (USP)**
 
-* **🚫 Cero Dependencias:** No utiliza numpy, scipy o pandas. Se ejecuta en cualquier intérprete de Python estándar (incluyendo sistemas heredados/legacy).  
-* **⚡ Optimización Embebida:** Los algoritmos son diseñados a la inversa (*reverse-engineered*) para funcionar en hardware con **menos de 2KB de RAM**.  
-* **🔄 Motor de Doble Núcleo:** Acelera automáticamente el entrenamiento utilizando **scikit-learn** (OPCIONAL) si está instalado en el PC anfitrión, volviendo al **ml\_runtime** de Python puro en caso contrario.
+* **🚫 Zero-Dependency Core & Autograd:** Entrena desde regresiones simples hasta redes neuronales profundas usando solo la biblioteca estándar de Python.
+* **⚡ Optimización Extrema (SRAM < 2KB):** Los algoritmos son diseñados a la inversa (*reverse-engineered*) para aplanar estructuras dinámicas y evitar la recursividad. Uso agresivo de memoria Flash (`PROGMEM`).
+* **🧠 Cuantificación INT8 Híbrida:** Convierte pesos de flotantes de 32 bits a enteros de 8 bits para almacenamiento, de-cuantizando al vuelo durante la inferencia para mantener la precisión matemática.
+* **📦 Empaquetado Industrial:** Exporta librerías nativas con manifiestos duales (`library.json` y `library.properties`) listas para compilar en **PlatformIO** y **Arduino IDE**.
 
 ---
 
-## **📂 Análisis de la Arquitectura Modular**
+## **📂 Ecosistema de Modelos: Legacy ML & Deep Learning**
 
-El framework opera a través de cinco módulos cohesionados, cada uno respetando el principio de la **Separación de Responsabilidades (SoC)**.
+MiniML Engine ofrece dos motores de inferencia, permitiendo al arquitecto de software elegir el enfoque perfecto según la tarea y el hardware.
 
-### **1\. ml\_runtime.py (El Núcleo Matemático)**
+### **1. MiniML Clásico (Legacy Machine Learning)**
 
-Es la sala de máquinas. Contiene las implementaciones de algoritmos de ML en Python puro. Cada línea de código aquí está escrita para reflejar matemáticamente el código C que se ejecutará en el microcontrolador.
+Ubicado en `ml_runtime.py`, este motor es el corazón para datos tabulares y señales analógicas simples. Ideal para sensores de baja frecuencia donde una red neuronal sería un desperdicio de ciclos de reloj.
 
-**Características Clave:**
+| Clase de Modelo | Algoritmo y Optimización en Edge (C++) |
+| --- | --- |
+| **`DecisionTreeClassifier`** | *CART (Impureza Gini)*. Los árboles se aplanan en arreglos lineales (`feature_index`, `threshold`) para permitir un uso de pila de **O(1)** mediante bucles `while` continuos. |
+| **`RandomForestClassifier`** | *Bagging*. Genera funciones C independientes guardadas en Flash para cada árbol y una función ligera de **Voto Mayoritario** en SRAM. |
+| **`MiniLinearModel`** | *SGD*. Utiliza actualizaciones iterativas. Exporta un arreglo simple de flotantes para una inferencia ultra-rápida por producto punto. |
+| **`MiniSVM`** | *Hinge Loss*. Implementa un límite de decisión lineal, perfecto para clasificación binaria en hardware sin unidad de coma flotante (FPU) dedicada. |
+| **`KNearestNeighbors`** | *Lazy Learning*. Exporta el dataset completo a Flash. Implementa un *Insertion Sort* in-place simulando una cola de prioridad para no agotar la RAM dinámica. |
+| **`MiniScaler`** | *Preprocesamiento*. Genera rutinas de normalización MinMax/Standard en C++ (`preprocess_data()`) para estabilizar las señales de los sensores antes de la inferencia. |
 
-* **MiniMatrixOps:** Una clase de álgebra lineal personalizada que reemplaza a NumPy. Maneja productos de puntos, traspuestas y multiplicaciones de matrices usando **listas nativas de Python**.  
-* **Diseño Iterativo:** Los algoritmos están diseñados para evitar la recursión profunda, previniendo el **Stack Overflow** en microcontroladores.
+### **2. MiniTensor (Embedded Deep Learning)**
 
-**Modelos y Algoritmos Soportados:**
+Ubicado en los módulos `tensor.py` y `layers.py`, este es el motor de diferenciación automática (*Autograd*) para la extracción de características complejas en series temporales, audio y visión artificial básica.
 
-| Clase de Modelo | Algoritmo | Optimización Embebida (Diseño Inverso) |
-| :---- | :---- | :---- |
-| **DecisionTreeClassifier** | CART (Impureza Gini) | Los árboles se aplanan en arrays lineales (feature\_index , threshold ) para permitir un uso de pila de **O(1)** durante la inferencia mediante un ciclo **while**. |
-| **RandomForestClassifier** | Bagging (Agregación Bootstrap) | Genera funciones C independientes para cada árbol y una función ligera de **"Voto Mayoritario"** en C. |
-| **MiniLinearModel** | Descenso de Gradiente Estocástico (SGD) | Utiliza actualizaciones de pesos iterativas. Exporta un array simple de flotantes weights para la inferencia mediante producto de puntos. |
-| **MiniSVM** | SVM Lineal (Pérdida Hinge) | Implementa un límite de decisión lineal, perfecto para clasificación binaria en hardware con **FPU** limitado. |
-| **MiniNeuralNetwork** | MLP (Backpropagation) | Soporta **Cuantificación**. Puede convertir pesos de **float de 32 bits** a **enteros de 8 bits**, reduciendo el tamaño del modelo en $\\sim$75% para el almacenamiento en memoria Flash. |
-| **KNearestNeighbors** | Distancia Euclidiana (Lazy) | **⚠️ Advertencia:** Exporta el *conjunto de datos completo* de entrenamiento como un **array C const**. Alto consumo de memoria Flash. |
-| **MiniScaler** | Escalado MinMax / Estándar | Registra estadísticas (min/max/mean/std) durante el entrenamiento para generar una función C **preprocess\_data()** que normaliza las entradas del sensor en tiempo real. |
+| Capa / Módulo | Descripción y Optimización de Inferencia en C++ |
+| --- | --- |
+| **`Conv1D` & `Conv2D**` | Convoluciones espaciales/temporales. El exportador indexa la geometría dinámicamente y genera bucles anidados con lectura segura mediante macros `READ_FLOAT`. |
+| **`SeparableConv2D`** | *MobileNet-Style*. Divide la convolución en *Depthwise* y *Pointwise*. Soporta **Operator Fusion** nativo en C++ para minimizar el acceso a memoria y acelerar la inferencia. |
+| **`ResidualBlock1D`** | *ResNet-Style*. Permite redes profundas sin desvanecimiento de gradiente sumando la identidad ($y = \mathcal{F}(x) + x$). Implementa indexación geométrica estricta para alinear las dimensiones en C++. |
+| **`MaxPool1D/2D`** | Reducción de dimensionalidad matemática con gestión de ventanas deslizantes (Kernel/Stride). |
+| **`Flatten` & `Linear**` | Perceptrón Multicapa. Soporta el aplanado recursivo de tensores dinámicos (hasta 4D) manteniendo el flujo del gradiente. |
+| **Activaciones** | `ReLU`, `Sigmoid`, `MSELoss`, `CrossEntropyLoss`. Implementadas con barreras de *Clip* para evitar *Overflows* matemáticos en arquitecturas de 8-bits. |
 
 ---
 
-### **2\. ml\_manager.py (El Orquestador)**
+## **⚙️ Arquitectura del Sistema (El Pipeline)**
+
+El framework asegura el principio de Separación de Responsabilidades a través de sus gestores internos:
+
+### **\. ml\_manager.py (El Orquestador)**
 
 La API de alto nivel que unifica el flujo de trabajo. Actúa como un puente entre el usuario y los algoritmos base.
 
@@ -253,7 +360,7 @@ La API de alto nivel que unifica el flujo de trabajo. Actúa como un puente entr
 
 ---
 
-### **3\. ml\_compat.py (Seguridad y Compatibilidad)**
+### **\. ml\_compat.py (Seguridad y Compatibilidad)**
 
 El guardián de los datos. Asegura que la naturaleza dinámica de Python no rompa la estricta naturaleza estática de C.
 
@@ -263,7 +370,7 @@ El guardián de los datos. Asegura que la naturaleza dinámica de Python no romp
 
 ---
 
-### **4\. ml\_factory.py (El Patrón Factory)**
+### **\. ml\_factory.py (El Patrón Factory)**
 
 Desacopla la instanciación del modelo del flujo de lógica.
 
@@ -272,7 +379,7 @@ Desacopla la instanciación del modelo del flujo de lógica.
 
 ---
 
-### **5\. ml\_exporter.py (Serialización y Exportación)**
+### **\. ml\_exporter.py (Serialización y Exportación)**
 
 Maneja la persistencia y traducción de modelos.
 
@@ -281,17 +388,21 @@ Maneja la persistencia y traducción de modelos.
 
 ---
 
-## **🛠️ Instalación y Uso**
+## **🛠️ Tooling & MLOps para Edge**
 
-### **Instalación**
+* **Análisis de Arquitectura (CLI):** Imprime resúmenes detallados de la topología del modelo, dimensiones de salida y conteo de parámetros entrenables.
+* **Estimador de Memoria:** Proyecta matemáticamente el consumo exacto de **SRAM** y **Memoria Flash** antes de compilar, previniendo reinicios (crashes) en el microcontrolador físico.
+* **Simulación Determinista:** El código generado ofrece paridad matemática perfecta (1:1) con el motor de Python, validado contra emuladores de hardware a nivel de instrucciones (como Wokwi).
 
-Dado que MiniML es un paquete de Python puro, la instalación es sencilla:
+---
 
-Bash
+## **🚀 Casos de Uso Expandidos (IoT Industrial & Robótica)**
 
-pip install miniml
+1. **Mantenimiento Predictivo (Acústica/Vibración):** Utilizando `Conv1D` y `ResidualBlock1D`, un microcontrolador puede analizar ventanas temporales de un acelerómetro y detectar anomalías en motores industriales de forma local (Edge Computing).
+2. **Fusión de Sensores (Soft-Sensors):** Combinando sensores de bajo costo (ej. DTH11, LDR) y procesándolos mediante un **Random Forest** o un **MLP Cuantizado**, el MCU puede predecir variables complejas sin requerir conexión a internet.
+3. **Tiny Vision:** Empleando `SeparableConv2D`, es posible entrenar clasificadores de patrones para matrices de baja resolución (ej. cámaras térmicas u ópticas pequeñas) reduciendo drásticamente la carga computacional.
 
-*(Opcional: Instalar scikit-learn para un entrenamiento más rápido en PC, pero NO es un requisito).*
+---
 
 ### **La Diferencia de fit()**
 
@@ -434,18 +545,73 @@ float predict(float inputs\[\]) {
 
 ---
 
-## **🤝 Contribuciones**
+## **💻 Ejemplo de Flujo de Trabajo para MiniTensor (End-to-End)**
 
-¡Las contribuciones son bienvenidas\! MiniML tiene como objetivo mantener su filosofía de "cero dependencias".
+Desde el entrenamiento en Python hasta el empaquetado para PlatformIO.
 
-1. Bifurca (Fork) el Proyecto.  
-2. Crea tu Rama de Característica (git checkout \-b feature/AmazingFeature).  
-3. Confirma tus Cambios (git commit \-m 'Add some AmazingFeature').  
-4. Empuja a la Rama (git push origin feature/AmazingFeature).  
-5. Abre un Pull Request.
+```python
+import miniml
+from miniml import Tensor, nn, optim
+from miniml.exporters.library_packer import LibraryPackager
+
+# 1. Definir Arquitectura (MiniTensor Deep Learning)
+model = nn.Sequential([
+    nn.Conv1d(in_channels=1, out_channels=4, kernel_size=3, stride=1, padding=1),
+    nn.MaxPool1d(kernel_size=2),
+    nn.ResidualBlock1D(in_channels=4, out_channels=4),
+    nn.Flatten(),
+    nn.Linear(16, 1),
+    nn.Sigmoid()
+])
+
+# 2. Entrenar en PC (Motor Autograd)
+optimizer = optim.SGD(model.parameters(), lr=0.01)
+# ... bucle de entrenamiento estándar ...
+
+# 3. Optimización para Edge (Cuantificación Híbrida INT8)
+model.quantize()
+
+# 4. Exportar a C++ Nativo
+from miniml.exporters import cpp_writer
+cpp_code = cpp_writer.generate_cpp_code(model, input_shape=(1, 1, 8))
+
+# 5. Empaquetar Librería Industrial (PlatformIO / Arduino)
+LibraryPackager.create_arduino_zip(
+    model_name="ResNet_Vibration_Detector",
+    cpp_code=cpp_code,
+    version="2.0.0",
+    quantized=True
+)
+print("¡Librería ZIP generada, estructurada y lista para compilar en hardware!")
+
+```
 
 ---
 
+## **🛠️ Instalación y Uso**
+
+### **Instalación**
+
+Dado que MiniML es un paquete de Python puro, la instalación es sencilla:
+
+Bash
+
+pip install miniml
+
+*(Opcional: Instalar scikit-learn para un entrenamiento más rápido en PC, pero NO es un requisito).*
+
+---
+
+## **🤝 Contribuciones**
+
+Las contribuciones son bienvenidas. MiniML tiene como misión mantener su filosofía estricta de "cero dependencias" y optimización a bajo nivel.
+
+1. Haz un *Fork* del Proyecto.
+2. Crea tu rama (`git checkout -b feature/NuevaOptimizacion`).
+3. Confirma tus cambios (`git commit -m 'Añadida nueva característica'`).
+4. Sube la rama (`git push origin feature/NuevaOptimizacion`).
+5. Abre un *Pull Request*.
+
 ## **📄 Licencia**
 
-Distribuido bajo la Licencia MIT. Consulta $\\text{LICENSE}$ para más información.
+Distribuido bajo la Licencia **Apache License 2.0**. Libre para uso académico, comercial e industrial garantizando la trazabilidad open-source. Consulta el archivo `LICENSE` para más información.
