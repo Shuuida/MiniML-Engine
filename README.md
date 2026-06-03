@@ -619,4 +619,4 @@ Las contribuciones son bienvenidas. MiniML tiene como misión mantener su filoso
 
 Distribuido bajo la Licencia **Apache License 2.0**. Libre para uso académico, comercial e industrial garantizando la trazabilidad open-source. Consulta el archivo `LICENSE` para más información.
 
-La documentación está en desarrollo, dentro de la carpeta docs serán subiendo de forma rutinaria la documentación sobre como usar la librería, como aprovechar el uso de seguridad de memoria en Arduino y su sintaxis. ¡Muchas gracias por la espera!
+La documentación está en desarrollo, dentro de la carpeta docs se irán subiendo de forma rutinaria la documentación sobre como usar la librería, como aprovechar el uso de seguridad de memoria en Arduino y su sintaxis. ¡Muchas gracias por la espera!
