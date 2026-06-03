@@ -262,7 +262,7 @@ print("ZIP library successfully generated, structured, and ready to compile on h
 
 Since MiniML is a pure Python package, installation is straightforward:
 
-pip install miniml
+pip install miniml-engine
 
 *(Optional: Install scikit-learn for faster training on PC, but it is NOT required).*
 
@@ -599,7 +599,7 @@ Dado que MiniML es un paquete de Python puro, la instalación es sencilla:
 
 Bash
 
-pip install miniml
+pip install miniml-engine
 
 *(Opcional: Instalar scikit-learn para un entrenamiento más rápido en PC, pero NO es un requisito).*
 
