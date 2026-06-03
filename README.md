@@ -278,10 +278,13 @@ Contributions are highly welcome. MiniML's mission is to strictly maintain its "
 4. Push to the Branch (`git push origin feature/NewOptimization`).
 5. Open a Pull Request.
 
-## **📄 License**
+## **📄 License and Documentation**
 
 Distributed under the **Apache License 2.0**. Free for academic, commercial, and industrial use, guaranteeing open-source traceability. See the `LICENSE` file for more information.
 
+The documentation is under development. Documentation on how to use the library, how to take advantage of Arduino's memory safety features, and its syntax will be uploaded routinely to the docs folder. Thank you for your patience!
+
+---
 
 # **🧠 MiniML Engine (Powered by MiniTensor)**
 
@@ -612,6 +615,8 @@ Las contribuciones son bienvenidas. MiniML tiene como misión mantener su filoso
 4. Sube la rama (`git push origin feature/NuevaOptimizacion`).
 5. Abre un *Pull Request*.
 
-## **📄 Licencia**
+## **📄 Licencia y Documentación**
 
 Distribuido bajo la Licencia **Apache License 2.0**. Libre para uso académico, comercial e industrial garantizando la trazabilidad open-source. Consulta el archivo `LICENSE` para más información.
+
+La documentación está en desarrollo, dentro de la carpeta docs serán subiendo de forma rutinaria la documentación sobre como usar la librería, como aprovechar el uso de seguridad de memoria en Arduino y su sintaxis. ¡Muchas gracias por la espera!
