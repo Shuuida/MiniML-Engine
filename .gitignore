@@ -20,3 +20,4 @@ test_outputs/
 *.json
 dist/
 miniml_engine.egg-info/
+exports/

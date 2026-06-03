@@ -1,176 +1,298 @@
 """
-memory_estimator.py
-Estimaciones de uso de Flash y SRAM para modelos MiniML exportados a C.
-Ajustado para la arquitectura de runtime actual (Soporte Int8 selectivo).
-"""
-from typing import Any, Dict
+Memory Estimator for MiniML Engine / Arduino Uno
+=========================================
+Estima el consumo de memoria Flash (Programa) y SRAM (Variables)
+para modelos MiniML exportados a C/C++ y Rust (Arduino).
 
-def estimate_memory(model: Any, quantized: bool = False, target_flash: int = None, target_sram: int = None) -> Dict[str, Any]:
+Soporta:
+- ml_runtime (Classic ML): DT, RF, SVM, KNN, MLP.
+- autograd (Deep Learning v3.0): CNN, TCN, DSC-CNN, ResNet, Autoencoders.
+
+Base de cálculo (Arduino Uno - ATmega328P):
+- Flash Total: 32,256 bytes (32KB - 0.5KB bootloader)
+- SRAM Total: 2,048 bytes (2KB)
+- Float size: 4 bytes (Standard) / 1 byte (Quantized INT8)
+- Pointer/Int size: 2 bytes
+"""
+
+from typing import Dict, Any, Tuple
+import math
+
+# Intentar importar módulos del core si están disponibles
+try:
+    from miniml.ml_runtime import ml_runtime
+except ImportError:
+    ml_runtime = None
+
+try:
+    from miniml.autograd import layers as nn
+    from miniml.autograd import tensor
+except ImportError:
+    nn = None
+    tensor = None
+
+# Constantes de Hardware (Arduino Uno)
+UNO_FLASH_LIMIT = 32256
+UNO_SRAM_LIMIT = 2048
+FLOAT_SIZE = 4
+INT8_SIZE = 1
+INT_SIZE = 2
+
+# Overheads estimados por Lenguaje (Bytes)
+OVERHEADS = {
+    'C': 600,       # Estructuras simples, sin runtime pesado
+    'C++': 1500,    # Clases, templates, MiniTensor Lib
+    'Rust': 3500    # Panic handler, Core lib (no_std)
+}
+
+def estimate_memory(model: Any, quantized: bool = False, target_flash: int = UNO_FLASH_LIMIT, target_sram: int = UNO_SRAM_LIMIT, language: str = 'C', input_shape: Tuple[int, ...] = None) -> Dict[str, Any]:
     """
-    Estima el uso de Flash (PROGMEM) y SRAM (Stack/Heap) para modelos MiniML.
+    Calcula el uso de memoria estimado del modelo.
     
     Args:
-        model: Instancia del modelo entrenado (MiniML).
-        quantized (bool): Si True, simula el uso de memoria en modo int8 (solo si el modelo lo soporta).
-        target_flash (int): Límite de Flash deseado (bytes) para generar advertencias.
-        target_sram (int): Límite de SRAM deseado (bytes).
-
-    Returns:
-        Dict con 'flash_bytes', 'sram_bytes_peak', 'warnings', 'too_big'.
+        model: Objeto del modelo (ml_runtime o autograd).
+        quantized: Si True, asume pesos en INT8 (1 byte).
+        target_flash: Límite de Flash del dispositivo.
+        target_sram: Límite de SRAM del dispositivo.
+        language: 'C', 'C++', 'Rust'.
+        input_shape: Tupla con dimensiones de entrada (ej: (1, 1, 28, 28)) para Deep Learning.
     """
-    flash = 0
-    sram_peak = 0
-    warnings = []
-
-    # Detectar si el modelo ya está cuantizado internamente
-    is_model_quantized = getattr(model, 'quantized', False)
-    # La cuantización efectiva aplica si el modelo ya lo está, o si el usuario lo solicita y el modelo lo soporta
-    # Nota: Linear, SVM y KNN actualmente NO soportan exportación int8 en ml_runtime.
-    supports_quantization = hasattr(model, 'quantize') or isinstance(model, (dict,)) # Dict asumo genérico
+    flash_bytes = 0
+    sram_bytes = 0
     
-    effective_quantized = is_model_quantized or (quantized and supports_quantization)
+    # Seleccionar peso de datos
+    data_size = INT8_SIZE if quantized else FLOAT_SIZE
     
-    # Peso base: 1 byte si es int8, 4 bytes si es float
-    # PERO cuidado: SVM/Linear/KNN siempre son float en la versión actual del runtime
-    base_weight_size = 1 if effective_quantized else 4
+    # Overhead base del lenguaje
+    overhead_code = OVERHEADS.get(language, 1000)
 
-    # ----------------------------------------------------
-    # ESTIMACIÓN DEL MODELO
+    model_type = type(model).__name__
 
-    # ÁRBOLES Y BOSQUES (DecisionTree / RandomForest)
-    if hasattr(model, 'root') or hasattr(model, 'trees'):
-        # Árboles usan int/float mixtos, la cuantización de pesos no aplica directamente a la estructura
-        # pero los valores de hoja podrían ser int en clasificación. Asumimos estándar C export.
-        try:
-            # Intentar importar la utilidad de aplanado de forma segura
-            try:
-                from miniml.ml_compat import _flatten_tree_to_arrays
-            except ImportError:
-                print (f"No se ha podido utilizar el aplanado de forma segura: Error en la exportación")
+    # MODELOS DEEP LEARNING (V3.0 / MiniTensor / Autograd)
+    if nn and (isinstance(model, nn.Module) or isinstance(model, nn.Sequential)):
+        # Overhead extra por la librería MiniTensor
+        overhead_code += 1000 
+        
+        # Flash: Suma de todos los parámetros (Flat)
+        # Recorremos recursivamente los parámetros del modelo
+        total_params = 0
+        
+        # Función auxiliar para contar elementos en un Tensor/Lista
+        def _count_elements(data):
+            if isinstance(data, list):
+                return sum(_count_elements(x) for x in data)
+            return 1
 
-            def get_tree_size(root_node):
-                if not root_node: return 0
-                struct = _flatten_tree_to_arrays(root_node)
-                n_nodes = len(struct.get('feature_index', []))
-                # Estructura C por nodo:
-                # int feature_index (2) + float threshold (4) + int left (2) + int right (2) + value (4 o 2)
-                # Total aprox: 14 bytes por nodo en arrays paralelos
-                return n_nodes * 14
-
-            if hasattr(model, 'trees'): # RandomForest
-                total_tree_flash = 0
-                max_tree_depth = 0
-                for t in model.trees:
-                    total_tree_flash += get_tree_size(getattr(t, 'root', None))
-                    max_tree_depth = max(max_tree_depth, getattr(t, 'max_depth', 10))
-                flash += total_tree_flash
-                # SRAM: Stack recursivo O(1) en exportación iterativa, pero necesita variables locales
-                # + buffer de votos para el ensemble: int votes[n_trees]
-                sram_peak += (len(model.trees) * 2) + 64 
-            else: # DecisionTree
-                flash += get_tree_size(model.root)
-                sram_peak += 32 # Variables locales de la función predict
-
-        except Exception as e:
-            warnings.append(f"Tree estimation error: {str(e)}")
-
-    # REDES NEURONALES (MiniNeuralNetwork)
-    elif hasattr(model, 'W1') and hasattr(model, 'W2'):
-        try:
-            # Aquí sí aplica la cuantización int8 vs float
-            nn_weight_size = 1 if effective_quantized else 4
+        # Si el modelo tiene state_dict (es un Module)
+        if hasattr(model, 'parameters'):
+            params = model.parameters()
+            for p in params:
+                # p es un Tensor
+                total_params += _count_elements(p.data)
+        
+        flash_bytes = (total_params * data_size) + overhead_code
+        
+        # SRAM: Estimación de Arena (Activaciones)
+        # Requiere input_shape para propagar dimensiones
+        if input_shape:
+            max_activation = 0
+            current_shape = input_shape
             
-            # Flash: Pesos + Biases
-            # W1: n_hidden * n_inputs
-            rows1 = len(model.W1)
-            cols1 = len(model.W1[0]) if rows1 > 0 else 0
-            # W2: n_outputs * n_hidden
-            rows2 = len(model.W2)
-            cols2 = len(model.W2[0]) if rows2 > 0 else 0
+            # Asumimos sequential para la estimación simple
+            layers_list = model.layers if hasattr(model, 'layers') else [model]
             
-            weights_count = (rows1 * cols1) + (rows2 * cols2)
-            biases_count = rows1 + rows2 # B1 + B2
+            # Input inicial ocupa RAM
+            input_bytes = math.prod(current_shape) * data_size
+            max_activation = input_bytes
             
-            # En exportación C:
-            # Pesos = nn_weight_size
-            # Biases = siempre float (4 bytes) en la implementación actual
-            # Escalas (si cuantizado) = float (4 bytes) * 2
+            prev_bytes = input_bytes
             
-            flash += (weights_count * nn_weight_size) + (biases_count * 4)
-            if effective_quantized:
-                flash += 8 # Escalas W1_scale, W2_scale
+            for layer in layers_list:
+                # Calcular output shape
+                out_shape = _infer_output_shape(layer, current_shape)
+                out_bytes = math.prod(out_shape) * data_size
 
-            # SRAM: Activaciones
-            # La implementación C declara float a1[...] y float a2[...] en el mismo scope.
-            # Se suman, no se hace max.
-            # float a1[hidden] + float a2[output]
-            sram_activations = (rows1 + rows2) * 4 # Siempre float
-            sram_peak += sram_activations + 32 # Overhead función
+                l_type = type(layer).__name__
+                is_inplace = any(x in l_type for x in ['ReLU', 'Flatten', 'Reshape', 'Dropout'])
+                
+                if is_inplace:
+                    # Si es in-place, no duplica memoria, usa el mismo buffer
+                    current_activation = max(prev_bytes, out_bytes)
+                else:
+                    # Si no, necesita memoria para Entrada y Salida simultáneamente
+                    current_activation = prev_bytes + out_bytes
+                
+                # Buffer temporal (ej: Im2Col para CNN)
+                temp_buffer = _estimate_temp_buffer(layer, current_shape, data_size)
+                
+                # El pico es: Lo que ya tenía + (Lo nuevo o el buffer temporal)
+                peak = current_activation + temp_buffer
+                
+                if peak > max_activation:
+                    max_activation = peak
+                
+                # Actualizar estado
+                current_shape = out_shape
+                prev_bytes = out_bytes
+            
+            sram_bytes = max_activation
+        else:
+            # Fallback si no hay input_shape: SRAM desconocida (Warning)
+            sram_bytes = 0 
 
-        except Exception:
-            warnings.append('Could not introspect NN matrices.')
+    # MODELOS ML CLÁSICOS (ml_runtime)
+    elif ml_runtime and isinstance(model, ml_runtime.MiniNeuralNetwork):
+        # Neural Net Legacy (MLP)
+        overhead_code = 1500 if language == 'C' else 2500
+        
+        w1_count = len(model.W1) * len(model.W1[0])
+        b1_count = len(model.B1)
+        w2_count = len(model.W2) * len(model.W2[0])
+        b2_count = len(model.B2)
+        
+        total_params = w1_count + b1_count + w2_count + b2_count
+        flash_bytes = (total_params * data_size) + overhead_code
+        sram_bytes = (model.n_in + model.n_hid + model.n_out) * data_size
 
-    # LINEAR / SVM (Pesos planos)
-    elif hasattr(model, 'weights') and isinstance(model.weights, list):
-        # Actualmente runtime exporta siempre como float array
+    elif ml_runtime and isinstance(model, (ml_runtime.DecisionTreeClassifier, ml_runtime.DecisionTreeRegressor)):
+        overhead_code = 800
+        n_nodes = _count_tree_nodes(model.root)
+        # Estructura de nodo comprimida (10-14 bytes)
+        node_size = 14
+        flash_bytes = (n_nodes * node_size) + overhead_code
+        sram_bytes = 50 
+
+    elif ml_runtime and isinstance(model, (ml_runtime.RandomForestClassifier, ml_runtime.RandomForestRegressor)):
+        overhead_code = 1200
+        total_nodes = 0
+        for tree in model.trees:
+            total_nodes += _count_tree_nodes(tree.root)
+        flash_bytes = (total_nodes * 14) + overhead_code
+        sram_bytes = (len(model.trees) * FLOAT_SIZE) + 100
+
+    elif ml_runtime and isinstance(model, ml_runtime.KNearestNeighbors):
+        overhead_code = 1000
+        n_samples = len(model.y_train)
+        n_features = model.n_features_trained
+        dataset_size = (n_samples * n_features * data_size) + (n_samples * data_size)
+        flash_bytes = dataset_size + overhead_code
+        sram_bytes = 100
+
+    elif ml_runtime and isinstance(model, (ml_runtime.MiniLinearModel, ml_runtime.MiniSVM)):
+        overhead_code = 600
         n_weights = len(model.weights)
-        flash += n_weights * 4 
-        sram_peak += 16 # Variable acumuladora 's'
+        flash_bytes = (n_weights * data_size) + data_size + overhead_code
+        sram_bytes = 40
 
-    # KNN (Dataset embebido)
-    elif hasattr(model, 'X_train') and model.X_train:
-        # KNN exporta todo el dataset como const float[]
-        try:
-            n_samples = len(model.X_train)
-            n_features = len(model.X_train[0]) if n_samples > 0 else 0
-            
-            # Dataset X (float) + Labels y (int o float)
-            bytes_x = n_samples * n_features * 4
-            bytes_y = n_samples * (4 if getattr(model, 'task', '') == 'regression' else 2) # int en AVR son 2
-            
-            dataset_bytes = bytes_x + bytes_y
-            flash += dataset_bytes
-            warnings.append(f'KNN embeds full dataset (~{dataset_bytes/1024:.1f} KB). High Flash usage.')
-            
-            # SRAM: Distancias e Indices arrays
-            # float distances[n_samples] + int indices[n_samples]
-            sram_peak += (n_samples * 4) + (n_samples * 2)
-            
-        except Exception:
-            warnings.append('KNN dataset size unknown.')
+    else:
+        return {
+            "flash_percent": 0,
+            "sram_percent": 0,
+            "error": f"Estimador no implementado para {model_type}"
+        }
 
-    # -------------------------------------------
-    # ESTIMACIÓN DEL PREPROCESAMIENTO (SCALER)
-    if hasattr(model, 'scaler') and model.scaler:
-        # El scaler exporta arrays float para min/max/mean/std
-        # Generalmente 2 arrays de tamaño n_features
-        try:
-            n_feats = getattr(model.scaler, 'n_features_trained', 0)
-            if n_feats:
-                # 2 arrays de floats (ej. min y denom)
-                scaler_flash = n_feats * 4 * 2
-                flash += scaler_flash
-                # El scaler opera in-place sobre el array de entrada, bajo impacto SRAM
-        except Exception:
-            pass
-
-    # ---------------------------------
-    # CHEQUEOS FINALES
-    too_big = False
+    # Resultados
+    weights_bytes = total_params * data_size
+    flash_bytes = weights_bytes + overhead_code
     
-    # Umbrales típicos Arduino Uno (ATMega328P): Flash 32KB, SRAM 2KB
-    if target_flash and flash > target_flash:
-        warnings.append(f'CRITICAL: Flash estimate ({flash} B) > Target ({target_flash} B).')
-        too_big = True
-    
-    if target_sram and sram_peak > target_sram:
-        warnings.append(f'CRITICAL: SRAM peak ({sram_peak} B) > Target ({target_sram} B). Stack overflow risk.')
-        too_big = True
-
     return {
-        'flash_bytes': int(flash),
-        'sram_bytes_peak': int(sram_peak),
-        'warnings': warnings,
-        'too_big': too_big,
-        'quantized_est': effective_quantized
+        "model_type": model_type,
+        "language": language,
+        "quantized": quantized,
+        "weights_bytes": int(weights_bytes),
+        "flash_bytes": int(flash_bytes),     # Peso total (Params + Código Runtime)
+        "flash_total": target_flash,
+        "flash_percent": round((flash_bytes / target_flash) * 100, 2),
+        "sram_bytes": int(sram_bytes),
+        "sram_total": target_sram,
+        "sram_percent": round((sram_bytes / target_sram) * 100, 2)
     }
+
+# HELPERS DEEP LEARNING (Shapes & Buffers)
+def _infer_output_shape(layer, input_shape):
+    """Calcula dimensiones de salida capa por capa."""
+    l_type = type(layer).__name__
+    
+    # Linear / Dense
+    if 'Linear' in l_type:
+        # Input: (Batch, In) -> Output: (Batch, Out)
+        return (input_shape[0], len(layer.weights.data))
+    
+    # Conv2d (Standard)
+    elif 'Conv2d' in l_type and not 'Separable' in l_type and not 'Conv1d' in l_type:
+        if len(input_shape) != 4: return input_shape
+        b, c, h, w = input_shape
+        
+        # Soporte seguro para tuplas o enteros en kernel/padding
+        k = layer.kernel_size[0] if isinstance(layer.kernel_size, tuple) else layer.kernel_size
+        p = layer.padding[0] if isinstance(layer.padding, tuple) else layer.padding
+        s = layer.stride
+        
+        h_out = (h + 2 * p - k) // s + 1
+        w_out = (w + 2 * p - k) // s + 1
+        return (b, layer.out_channels, h_out, w_out)
+        
+    # SeparableConv2d (DSC-CNN)
+    elif 'SeparableConv2d' in l_type:
+        # La salida dimensional la dicta la capa pointwise (1x1)
+        return _infer_output_shape(layer.pointwise, input_shape)
+
+    # Conv1d (TCN / Audio)
+    elif 'Conv1d' in l_type:
+        # Input: (Batch, C, T)
+        if len(input_shape) == 3:
+            b, c, t = input_shape
+            # Conv1d usa una Conv2d interna con kernel (1, k)
+            k = layer.internal.kernel_size[1]
+            p = layer.internal.padding[1]
+            s = layer.internal.stride
+            
+            t_out = (t + 2 * p - k) // s + 1
+            return (b, layer.internal.out_channels, t_out)
+        return input_shape
+
+    # Pooling
+    elif 'MaxPool' in l_type:
+        if len(input_shape) == 4:
+            b, c, h, w = input_shape
+            k = layer.kernel_size[0] if isinstance(layer.kernel_size, (tuple, list)) else layer.kernel_size
+            s = layer.stride[0] if isinstance(layer.stride, (tuple, list)) else layer.stride
+            h_out = (h - k) // s + 1
+            w_out = (w - k) // s + 1
+            return (b, c, h_out, w_out)
+        return input_shape
+
+    # Flatten
+    elif 'Flatten' in l_type:
+        return (1, math.prod(input_shape))
+        
+    # ResidualBlock (Soft-Sensors)
+    elif 'ResidualBlock' in l_type:
+        # El bloque residual mantiene la dimensión si stride=1, o la reduce si stride>1.
+        # Calculamos la salida de la primera conv interna para saber la verdad.
+        return _infer_output_shape(layer.conv1, input_shape)
+
+    # Default (ReLU, Dropout, etc -> No cambian forma)
+    return input_shape
+
+def _estimate_temp_buffer(layer, input_shape, data_size):
+    """Estima memoria temporal necesaria (ej: Im2Col buffer)."""
+    l_type = type(layer).__name__
+
+    if 'ResidualBlock' in l_type: 
+        return 256 
+
+    if 'Conv2d' in l_type and not hasattr(layer, 'depthwise'):
+        if len(input_shape) == 4: return 256 
+    elif 'SeparableConv2d' in l_type:
+        return 64
+    return 0
+
+# HELPERS ML CLÁSICO
+def _count_tree_nodes(node):
+    """Cuenta nodos recursivamente."""
+    if not isinstance(node, dict): 
+        return 1
+    if node.get('index') == -1: 
+        return 1
+    return 1 + _count_tree_nodes(node.get('left')) + _count_tree_nodes(node.get('right'))

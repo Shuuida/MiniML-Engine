@@ -1,12 +1,12 @@
-"""
-Test Suite para memory_estimator.py
+""" 
+Test Suite for memory_estimator.py
 -----------------------------------
-Valida:
-1. Estimación precisa de Flash/SRAM para distintos modelos.
-2. Detección correcta de reducción de tamaño por Cuantización (int8).
-3. Inmutabilidad de modelos que no soportan cuantización (Linear/SVM).
-4. Generación de advertencias críticas (Stack Overflow, Flash Exceeded).
-5. Detección de consumo masivo de memoria en KNN.
+Validates:
+1. Accurate Flash/SRAM estimation for different models.
+2. Correct detection of size reduction due to Quantization (int8).
+3. Immutability of models that do not support quantization (Linear/SVM).
+4. Generation of critical warnings (Stack Overflow, Flash Exceeded).
+5. Detection of massive memory consumption in KNNs.
 """
 
 import unittest
@@ -16,7 +16,7 @@ from estimators import memory_estimator
 class TestMemoryEstimator(unittest.TestCase):
 
     def setUp(self):
-        # Dataset simple para pruebas rápidas
+        # Simple dataset for quick tests
         self.data_xor = [[0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 0]]
         self.data_reg = [[1.0, 2.0], [2.0, 4.0], [3.0, 6.0]]
 
@@ -27,7 +27,7 @@ class TestMemoryEstimator(unittest.TestCase):
         
         est = memory_estimator.estimate_memory(model)
         
-        # Un árbol pequeño debe ocupar algo de flash (>0) y poca SRAM
+        # A small tree should occupy some flash (>0) and little SRAM
         print(f"   > Flash: {est['flash_bytes']} B, SRAM: {est['sram_bytes_peak']} B")
         self.assertGreater(est['flash_bytes'], 0)
         self.assertGreater(est['sram_bytes_peak'], 0)
@@ -35,34 +35,34 @@ class TestMemoryEstimator(unittest.TestCase):
 
     def test_quantization_reduction_nn(self):
         print("\n[TEST] Reducción por Cuantización en Neural Network...")
-        # Crear una NN mediana
+        # Create a medium-sized NN
         nn = ml_runtime.MiniNeuralNetwork(n_inputs=2, n_hidden=10, n_outputs=1)
         nn.fit(self.data_xor) # Inicializa matrices
         
-        # 1. Estimación en modo Float (Normal)
+        # 1. Float (Normal) mode estimation
         est_float = memory_estimator.estimate_memory(nn, quantized=False)
         flash_float = est_float['flash_bytes']
         
-        # 2. Estimación en modo Int8 (Simulado)
-        # Nota: Pasamos quantized=True al estimador para ver la predicción
+        # 2. Estimation in Int8 mode (Simulated)
+        # Note: We set quantized=True to the estimator to see the prediction
         est_int8 = memory_estimator.estimate_memory(nn, quantized=True)
         flash_int8 = est_int8['flash_bytes']
         
         print(f"   > Float Flash: {flash_float} B")
         print(f"   > Int8 Flash:  {flash_int8} B")
         
-        # Validación: La versión int8 debe ser significativamente menor (aprox 1/4 en pesos)
-        # No es exactamente 1/4 porque los biases siguen siendo float, pero debe bajar notablemente.
-        self.assertLess(flash_int8, flash_float * 0.6, "La cuantización no redujo la memoria significativamente")
-        self.assertTrue(est_int8['quantized_est'], "El estimador no reportó modo cuantizado efectivo")
+        # Validation: The int8 version should be significantly smaller (approximately 1/4 in weights)
+        #It's not exactly 1/4 because the biases are still floats, but it should be noticeably smaller.
+        self.assertLess(flash_int8, flash_float * 0.6, "Quantization did not significantly reduce memory")
+        self.assertTrue(est_int8['quantized_est'], "The estimator did not report an effective quantized mode")
 
     def test_no_quantization_linear(self):
         print("\n[TEST] Inmutabilidad de Linear Model ante Cuantización...")
         lin = ml_runtime.MiniLinearModel()
         lin.fit(self.data_reg)
         
-        # Linear Model NO soporta int8 en este framework, siempre es float.
-        # El estimador debe ser inteligente y dar el mismo tamaño aunque pidamos quantized=True.
+        # Linear Model does NOT support int8 in this framework; it's always float.
+        # The estimator must be intelligent and return the same size even if we specify quantized=True.
         est_float = memory_estimator.estimate_memory(lin, quantized=False)
         est_force = memory_estimator.estimate_memory(lin, quantized=True)
         

@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "miniml-engine"
-version = "1.0.2"
-description = "A lightweight, dependency-free Machine Learning framework for Embedded Systems"
+version = "1.1.0"
+description = "Edge AI and Embedded Machine Learning Framework (Zero-Dependencies)"
 readme = "README.md"
 authors = [
-  { name="Michego Takoro", email="tmichego@gmail.com" },
+  { name="Wilner Manzanares (Michego Takoro 'Shuuida')", email="tmichego@gmail.com" },
 ]
 license = { file = "LICENSE" }
 requires-python = ">=3.7"
@@ -28,7 +28,14 @@ faster-training = [
     "scikit-learn>=1.0.0",
     "numpy",
     "scipy"
-    ]
+]
+
+hardware = [
+    "pyserial"
+]
+
+[project.scripts]
+miniml = "miniml_cli.main:main"
 
 [project.urls]
 "Homepage" = "https://github.com/Shuuida/MiniML-Engine"
@@ -36,4 +43,4 @@ faster-training = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["miniml*", "estimators*", "adapters*"]
+include = ["miniml*", "estimators*", "adapters*", "miniml_cli*"]
