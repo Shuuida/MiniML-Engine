@@ -64,11 +64,11 @@ Located in the `tensor.py` and `layers.py` modules, this is the automatic differ
 
 | Layer / Module | Description & C++ Inference Optimization |
 | --- | --- |
-| **`Conv1D` & `Conv2D**` | Spatial/temporal convolutions. The exporter dynamically indexes the geometry and generates nested loops with safe memory reads using `READ_FLOAT` macros. |
+| **`Conv1D` & `Conv2D`** | Spatial/temporal convolutions. The exporter dynamically indexes the geometry and generates nested loops with safe memory reads using `READ_FLOAT` macros. |
 | **`SeparableConv2D`** | *MobileNet-Style*. Splits the convolution into *Depthwise* and *Pointwise* steps. Supports native **Operator Fusion** in C++ to minimize memory access and accelerate inference. |
 | **`ResidualBlock1D`** | *ResNet-Style*. Enables deep networks without vanishing gradients by adding the identity ($y = \mathcal{F}(x) + x$). Implements strict geometric indexing to align dimensions in C++. |
 | **`MaxPool1D/2D`** | Mathematical dimensionality reduction with sliding window management (Kernel/Stride). |
-| **`Flatten` & `Linear**` | Multilayer Perceptron. Supports recursive flattening of dynamic tensors (up to 4D) while maintaining the gradient flow. |
+| **`Flatten` & `Linear`** | Multilayer Perceptron. Supports recursive flattening of dynamic tensors (up to 4D) while maintaining the gradient flow. |
 | **Activations** | `ReLU`, `Sigmoid`, `MSELoss`, `CrossEntropyLoss`. Implemented with *Clip* barriers to prevent mathematical *Overflows* in 8-bit architectures. |
 
 ---
@@ -337,11 +337,11 @@ Ubicado en los módulos `tensor.py` y `layers.py`, este es el motor de diferenci
 
 | Capa / Módulo | Descripción y Optimización de Inferencia en C++ |
 | --- | --- |
-| **`Conv1D` & `Conv2D**` | Convoluciones espaciales/temporales. El exportador indexa la geometría dinámicamente y genera bucles anidados con lectura segura mediante macros `READ_FLOAT`. |
+| **`Conv1D` & `Conv2D`** | Convoluciones espaciales/temporales. El exportador indexa la geometría dinámicamente y genera bucles anidados con lectura segura mediante macros `READ_FLOAT`. |
 | **`SeparableConv2D`** | *MobileNet-Style*. Divide la convolución en *Depthwise* y *Pointwise*. Soporta **Operator Fusion** nativo en C++ para minimizar el acceso a memoria y acelerar la inferencia. |
 | **`ResidualBlock1D`** | *ResNet-Style*. Permite redes profundas sin desvanecimiento de gradiente sumando la identidad ($y = \mathcal{F}(x) + x$). Implementa indexación geométrica estricta para alinear las dimensiones en C++. |
 | **`MaxPool1D/2D`** | Reducción de dimensionalidad matemática con gestión de ventanas deslizantes (Kernel/Stride). |
-| **`Flatten` & `Linear**` | Perceptrón Multicapa. Soporta el aplanado recursivo de tensores dinámicos (hasta 4D) manteniendo el flujo del gradiente. |
+| **`Flatten` & `Linear`** | Perceptrón Multicapa. Soporta el aplanado recursivo de tensores dinámicos (hasta 4D) manteniendo el flujo del gradiente. |
 | **Activaciones** | `ReLU`, `Sigmoid`, `MSELoss`, `CrossEntropyLoss`. Implementadas con barreras de *Clip* para evitar *Overflows* matemáticos en arquitecturas de 8-bits. |
 
 ---
