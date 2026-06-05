@@ -18,24 +18,24 @@ MiniML implements **Post-Training Quantization (PTQ)** for neural networks, enab
 
 ### **Key Benefits**
 
-* **Memory Reduction**: \~75% less space usage (int8 vs float32).  
+* **Memory Reduction**: ~75% less space usage (int8 vs float32).  
 * **Acceleration**: Faster integer operations on MCUs lacking an FPU.  
 * **CMSIS-NN Compatibility**: Integration with optimized ARM kernels.  
-* **Preserved Precision**: Typical accuracy loss is \< 2%.
+* **Preserved Precision**: Typical accuracy loss is < 2%.
 
 ## **Quantization Architecture**
 
 ### **Core Components**
 
-#### **1\. MiniNeuralNetwork (ml\_runtime.py)**
+#### **1. MiniNeuralNetwork (ml_runtime.py)**
 
 The base class that implements:
 
 * Activation calibration (calibrate()).  
 * Weight and bias quantization (quantize()).  
-* Native export to C (to\_arduino\_code()).
+* Native export to C (to_arduino_code()).
 
-#### **2\. CMSISAdapter (adapters/cmsis\_nn/adapter.py)**
+#### **2. CMSISAdapter (adapters/cmsis_nn/adapter.py)**
 
 An advanced adapter that generates code compatible with:
 
@@ -45,24 +45,24 @@ An advanced adapter that generates code compatible with:
 ### **Quantization Flow**
 
 graph TD;  
-    A\[Training (Float32)\] \--\> B\[Calibration (calibrate())\];  
-    B \--\> C\[Quantization (quantize())\];  
-    C \--\> D\[Export (export\_to\_c())\];  
-    D \--\> E\[C Firmware (int8 inference)\];
+    A[Training (Float32)] --> B[Calibration (calibrate())];  
+    B --> C[Quantization (quantize())];  
+    C --> D[Export (export_to_c())];  
+    D --> E[C Firmware (int8 inference)];
 
-1. **Calibration**: Calculates act\_scales for input, hidden, and output layers.  
+1. **Calibration**: Calculates act_scales for input, hidden, and output layers.  
 2. **Quantization**: Converts weights to int8 and biases to int32.  
 3. **Export**: Generates optimized C code.
 
 ## **Quantization Methods**
 
-### **1\. Per-Layer Symmetric Quantization**
+### **1. Per-Layer Symmetric Quantization**
 
 **Implementation**: Default method in MiniNeuralNetwork.quantize().
 
 #### **Characteristics:**
 
-* **Weights**: Quantized to int8 with range \[-127, 127\].  
+* **Weights**: Quantized to int8 with range [-127, 127].  
 * **Zero-point**: Implicitly 0 (symmetric quantization).  
 * **Scale**: One scale per weight matrix (per-layer).  
 * **Biases**: Quantized to int32 to preserve precision.
@@ -71,18 +71,18 @@ graph TD;
 
 **For Weights (W):**
 
-abs\_max \= max(abs(min(W)), abs(max(W)))  
-scale\_w \= abs\_max / 127.0  
-q\_w \= round(w / scale\_w)  \# Clipped to \[-127, 127\]
+abs_max = max(abs(min(W)), abs(max(W)))  
+scale_w = abs_max / 127.0  
+q_w = round(w / scale_w)  # Clipped to [-127, 127]
 
 **For Biases (B):**
 
-effective\_scale \= input\_scale \* scale\_w  
-b\_int32 \= round(b / effective\_scale)  \# Clipped to int32 range
+effective_scale = input_scale * scale_w  
+b_int32 = round(b / effective_scale)  # Clipped to int32 range
 
 **Requantization Multiplier:**
 
-requant\_mult \= effective\_scale / output\_scale
+requant_mult = effective_scale / output_scale
 
 #### **Pros:**
 
@@ -96,27 +96,30 @@ requant\_mult \= effective\_scale / output\_scale
 * ❌ Lower accuracy than per-channel quantization for large networks.  
 * ❌ Sensitive to outliers in weight distribution.
 
-### **2\. CMSIS-NN Quantization (Fixed-Point)**
+### **2. CMSIS-NN Quantization (Fixed-Point)**
 
-**Implementation**: CMSISAdapter.generate\_c().
+**Implementation**: CMSISAdapter.generate_c().
 
 #### **Characteristics:**
 
-* **Weights**: int8\_t stored in aligned arrays.  
-* **Biases**: Pre-quantized int32\_t.  
-* **Multipliers**: Converted to Q31 format (significand \+ shift).  
-* **Activations**: int8\_t throughout the entire inference.
+* **Weights**: int8_t stored in aligned arrays.  
+* **Biases**: Pre-quantized int32_t.  
+* **Multipliers**: Converted to Q31 format (significand + shift).  
+* **Activations**: int8_t throughout the entire inference.
 
 #### **Q31 Format for Multipliers:**
 
-def \_quantize\_multiplier(real\_multiplier: float) \-\> Tuple\[int, int\]:  
-    significand, shift \= math.frexp(real\_multiplier)  
-    q\_mult \= int(round(significand \* (1 \<\< 31)))  
-    \# Adjustment to avoid overflow  
-    if q\_mult \== (1 \<\< 31):  
-        q\_mult //= 2  
-        shift \+= 1  
-    return q\_mult, shift
+```python
+def _quantize_multiplier(real_multiplier: float) -> Tuple[int, int]:  
+    significand, shift = math.frexp(real_multiplier)  
+    q_mult = int(round(significand * (1 << 31)))  
+    # Adjustment to avoid overflow  
+    if q_mult == (1 << 31):  
+        q_mult //= 2  
+        shift += 1  
+    return q_mult, shift
+
+```
 
 #### **Pros:**
 
@@ -131,23 +134,26 @@ def \_quantize\_multiplier(real\_multiplier: float) \-\> Tuple\[int, int\]:
 * ❌ Limited to ARM Cortex-M architectures.  
 * ❌ Higher implementation complexity.
 
-### **3\. AVR Hybrid Mode (Arduino 8-bit)**
+### **3. AVR Hybrid Mode (Arduino 8-bit)**
 
-**Implementation**: MiniNeuralNetwork.to\_arduino\_code().
+**Implementation**: MiniNeuralNetwork.to_arduino_code().
 
 #### **Characteristics:**
 
-* **Weights**: int8\_t stored in PROGMEM (Flash).  
+* **Weights**: int8_t stored in PROGMEM (Flash).  
 * **Scales**: float stored in PROGMEM.  
 * **Computation**: Hybrid (int8 storage, float compute).  
 * **Biases**: Original float stored in PROGMEM.
 
 #### **Strategy:**
 
+```c
 // Read quantized weight from Flash  
-int8\_t w \= pgm\_read\_byte(\&W1\[i\]\[j\]);  
+int8_t w = pgm_read_byte(&W1[i][j]);  
 // On-the-fly dequantization  
-float dequantized \= (float)w \* scale \* input;
+float dequantized = (float)w * scale * input;
+
+```
 
 #### **Pros:**
 
@@ -168,91 +174,100 @@ float dequantized \= (float)w \* scale \* input;
 
 **Purpose**: Determine activation ranges for each layer.
 
-def calibrate(self, dataset: List\[List\[float\]\]):  
+```python
+def calibrate(self, dataset: List[List[float]]):  
     """  
     Calculates activation ranges (min/max) for Input, Hidden, and Output.  
     Essential for int8 Post-Training Quantization.  
     """  
-    \# Iterates over the dataset and finds:  
-    \# \- max\_in: absolute max of inputs  
-    \# \- max\_hidden: absolute max of hidden activations  
-    \# \- max\_out: absolute max of outputs  
+    # Iterates over the dataset and finds:  
+    # - max_in: absolute max of inputs  
+    # - max_hidden: absolute max of hidden activations  
+    # - max_out: absolute max of outputs  
       
-    self.act\_scales \= {  
-        'input': max\_in / 127.0,  
-        'hidden': max\_hidden / 127.0,  
-        'output': max\_out / 127.0  
+    self.act_scales = {  
+        'input': max_in / 127.0,  
+        'hidden': max_hidden / 127.0,  
+        'output': max_out / 127.0  
     }
+
+```
 
 **Important Notes**:
 
 * Automatically executed after fit().  
 * Requires a calibration dataset (typically the training set).  
-* Scales are saved in act\_scales for later use.
+* Scales are saved in act_scales for later use.
 
 ### **Step 2: Quantization (quantize())**
 
 **Purpose**: Convert weights and biases from float32 to int8/int32.
 
-def quantize(self, per\_channel: bool \= True):  
+```python
+def quantize(self, per_channel: bool = True):  
     """  
     Quantizes weights to int8 and biases to int32.  
-    Requires previously calculated act\_scales.  
+    Requires previously calculated act_scales.  
     """  
-    \# For each layer:  
-    \# 1\. Calculate scale per weight row  
-    \# 2\. Quantize weights to int8  
-    \# 3\. Quantize biases to int32  
-    \# 4\. Calculate requantization multipliers  
+    # For each layer:  
+    # 1. Calculate scale per weight row  
+    # 2. Quantize weights to int8  
+    # 3. Quantize biases to int32  
+    # 4. Calculate requantization multipliers  
       
-    self.q\_W1, self.i32\_B1, self.requant\_mult1, self.s\_W1\_list \= ...  
-    self.q\_W2, self.i32\_B2, self.requant\_mult2, self.s\_W2\_list \= ...  
-    self.quantized \= True
+    self.q_W1, self.i32_B1, self.requant_mult1, self.s_W1_list = ...  
+    self.q_W2, self.i32_B2, self.requant_mult2, self.s_W2_list = ...  
+    self.quantized = True
+
+```
 
 **Generated Attributes**:
 
-* q\_W1, q\_W2: Quantized weight matrices (int8).  
-* i32\_B1, i32\_B2: Quantized bias vectors (int32).  
-* requant\_mult1, requant\_mult2: Requantization multipliers (float).  
-* s\_W1\_list, s\_W2\_list: Scales per weight row (float).
+* q_W1, q_W2: Quantized weight matrices (int8).  
+* i32_B1, i32_B2: Quantized bias vectors (int32).  
+* requant_mult1, requant_mult2: Requantization multipliers (float).  
+* s_W1_list, s_W2_list: Scales per weight row (float).
 
-### **Step 3: Export (export\_to\_c())**
+### **Step 3: Export (export_to_c())**
 
 **Purpose**: Generate optimized C code for firmware.
 
 **Automatic Detection**:
 
-* If model has q\_W1 → Uses CMSISAdapter (Preferred).  
-* If that fails → Uses to\_arduino\_code() (Native fallback).  
+* If model has q_W1 → Uses CMSISAdapter (Preferred).  
+* If that fails → Uses to_arduino_code() (Native fallback).  
 * If scaler exists → Includes preprocessing code.
 
 ## **Exporting to C Firmware**
 
 ### **Option 1: CMSIS-NN (Recommended for ARM Cortex-M)**
 
-**Generated by**: CMSISAdapter.generate\_c().
+**Generated by**: CMSISAdapter.generate_c().
 
 **Features**:
 
-* Code optimized for arm\_fully\_connected\_s8().  
+* Code optimized for arm_fully_connected_s8().  
 * Full int8 inference.  
 * Portable fallback if CMSIS-NN is not enabled.
 
 **Code Structure**:
 
+```c
 // Data arrays (aligned for SIMD)  
-const int8\_t W1\[N\] ALIGNED(4) \= {...};  
-const int32\_t B1\[M\] ALIGNED(4) \= {...};  
-const int32\_t MULT1\[M\] ALIGNED(4) \= {...};  
-const int32\_t SHIFT1\[M\] ALIGNED(4) \= {...};
+const int8_t W1[N] ALIGNED(4) = {...};  
+const int32_t B1[M] ALIGNED(4) = {...};  
+const int32_t MULT1[M] ALIGNED(4) = {...};  
+const int32_t SHIFT1[M] ALIGNED(4) = {...};
 
-\#ifdef CMSISNN\_ENABLED  
+#ifdef CMSISNN_ENABLED  
     // Uses optimized ARM kernels  
-    arm\_fully\_connected\_s8(...);  
-\#else  
+    arm_fully_connected_s8(...);  
+#else  
     // Standard C portable fallback  
     // Manual loop implementation  
-\#endif
+#endif
+
+```
 
 **Pros**:
 
@@ -262,7 +277,7 @@ const int32\_t SHIFT1\[M\] ALIGNED(4) \= {...};
 
 ### **Option 2: AVR Hybrid Mode (Arduino 8-bit)**
 
-**Generated by**: MiniNeuralNetwork.to\_arduino\_code().
+**Generated by**: MiniNeuralNetwork.to_arduino_code().
 
 **Features**:
 
@@ -272,21 +287,24 @@ const int32\_t SHIFT1\[M\] ALIGNED(4) \= {...};
 
 **Code Structure**:
 
-\#include \<avr/pgmspace.h\>
+```c
+#include <avr/pgmspace.h>
 
 // Quantized weights in Flash  
-const int8\_t W1\[N\]\[M\] PROGMEM \= {...};  
+const int8_t W1[N][M] PROGMEM = {...};  
 // Scales in Flash  
-const float sW1\[N\] PROGMEM \= {...};  
+const float sW1[N] PROGMEM = {...};  
 // Original biases in Flash  
-const float B1\[N\] PROGMEM \= {...};
+const float B1[N] PROGMEM = {...};
 
-void predict(float \*row, float \*out) {  
+void predict(float *row, float *out) {  
     // On-the-fly dequantization  
-    float w \= (float)pgm\_read\_byte(\&W1\[i\]\[j\]) \* pgm\_read\_float(\&sW1\[i\]);  
+    float w = (float)pgm_read_byte(&W1[i][j]) * pgm_read_float(&sW1[i]);  
     // Computation in float  
-    sum \+= w \* input\[j\];  
+    sum += w * input[j];  
 }
+
+```
 
 **Pros**:
 
@@ -306,7 +324,7 @@ void predict(float \*row, float \*out) {
 | **Weight Storage** | RAM/Flash | RAM (aligned) | PROGMEM (Flash) |
 | **Inference Speed** | Medium | Very High | Low-Medium |
 | **Power Consumption** | Medium | Low | Medium |
-| **Memory Required** | \~75% less | \~75% less | \~75% less (weights) |
+| **Memory Required** | ~75% less | ~75% less | ~75% less (weights) |
 | **Compatibility** | Universal | ARM Cortex-M | AVR 8-bit |
 | **Dependencies** | None | CMSIS-NN | None |
 | **FPU Required** | Optional | No | Yes (emulation OK) |
@@ -319,7 +337,7 @@ void predict(float \*row, float \*out) {
 
 | Metric | Original Float32 | Per-Layer (int8) | CMSIS-NN | AVR Hybrid |
 | :---- | :---- | :---- | :---- | :---- |
-| **Model Size** | 100% | \~25% | \~25% | \~25% (weights) |
+| **Model Size** | 100% | ~25% | ~25% | ~25% (weights) |
 | **Inference Speed** | 1x | 2-3x | 5-10x | 1.5-2x |
 | **Accuracy Loss** | 0% | 0.5-2% | 0.5-2% | 0.5-2% |
 | **RAM Usage** | High | Medium | Medium | Low |
@@ -341,7 +359,7 @@ void predict(float \*row, float \*out) {
    * ⚠️ Lower accuracy than per-channel for large networks.  
    * ✅ Sufficient for small-to-medium networks.  
 4. **Float Activations (Native Mode)**  
-   * ⚠️ In to\_arduino\_code(), activations are calculated in float.  
+   * ⚠️ In to_arduino_code(), activations are calculated in float.  
    * ✅ Only CMSIS-NN uses pure int8 activations.  
    * ⚠️ Requires FPU or emulation for hybrid mode.  
 5. **Limited to MLP (2 Layers)**  
@@ -374,11 +392,14 @@ void predict(float \*row, float \*out) {
 
 **Usage Example**:
 
-\# Train and export  
-model \= MiniNeuralNetwork(n\_inputs=2, n\_hidden=4, n\_outputs=1)  
+```python
+# Train and export  
+model = MiniNeuralNetwork(n_inputs=2, n_hidden=4, n_outputs=1)  
 model.fit(dataset)  
-\# Automatic quantization in export\_to\_c()  
-code \= ml\_manager.export\_to\_c("my\_model")
+# Automatic quantization in export_to_c()  
+code = ml_manager.export_to_c("my_model")
+
+```
 
 #### **🥈 Second Option: AVR Hybrid Mode**
 
@@ -390,9 +411,9 @@ code \= ml\_manager.export\_to\_c("my\_model")
 
 **Usage Example**:
 
-\# Similar to above, but export\_to\_c() will fallback to to\_arduino\_code()  
-\# if CMSISAdapter is not available  
-code \= ml\_manager.export\_to\_c("my\_model")
+# Similar to above, but export_to_c() will fallback to to_arduino_code()  
+# if CMSISAdapter is not available  
+code = ml_manager.export_to_c("my_model")
 
 #### **🥉 Third Option: Native Per-Layer**
 
@@ -415,23 +436,23 @@ code \= ml\_manager.export\_to\_c("my\_model")
 ### **Best Practices**
 
 1. **Always Calibrate with Representative Dataset**  
-   \# Use the same training dataset  
-   model.fit(training\_dataset)  \# Calibrates automatically
+   # Use the same training dataset  
+   model.fit(training_dataset)  # Calibrates automatically
 
 2. **Validate Post-Quantization Accuracy**  
-   \# Compare accuracy before and after  
-   accuracy\_before \= evaluate(model, test\_set)  
+   # Compare accuracy before and after  
+   accuracy_before = evaluate(model, test_set)  
    model.quantize()  
-   accuracy\_after \= evaluate\_quantized(model, test\_set)  
-   assert accuracy\_after \>= accuracy\_before \- 0.02  \# 2% tolerance
+   accuracy_after = evaluate_quantized(model, test_set)  
+   assert accuracy_after >= accuracy_before - 0.02  # 2% tolerance
 
 3. **Use Input Scaling**  
-   \# Scaler helps maintain consistent ranges  
-   ml\_manager.train\_pipeline(  
-       model\_name="model",  
+   # Scaler helps maintain consistent ranges  
+   ml_manager.train_pipeline(  
+       model_name="model",  
        dataset=data,  
-       model\_type="neural\_network",  
-       scaling="minmax"  \# Recommended  
+       model_type="neural_network",  
+       scaling="minmax"  # Recommended  
    )
 
 4. **Optimize Architecture for Quantization**  
@@ -443,86 +464,96 @@ code \= ml\_manager.export\_to\_c("my\_model")
 
 ### **Example 1: Full Training and Export**
 
-from miniml import ml\_manager
 
-\# Example Dataset (XOR)  
-dataset \= \[  
-    \[0.0, 0.0, 0\],  
-    \[0.0, 1.0, 1\],  
-    \[1.0, 0.0, 1\],  
-    \[1.0, 1.0, 0\]  
-\]
+```python
+from miniml import ml_manager
 
-\# Train with scaling  
-result \= ml\_manager.train\_pipeline(  
-    model\_name="xor\_nn",  
+# Example Dataset (XOR)  
+dataset = [  
+    [0.0, 0.0, 0],  
+    [0.0, 1.0, 1],  
+    [1.0, 0.0, 1],  
+    [1.0, 1.0, 0]  
+]
+
+# Train with scaling  
+result = ml_manager.train_pipeline(  
+    model_name="xor_nn",  
     dataset=dataset,  
-    model\_type="neural\_network",  
+    model_type="neural_network",  
     params={  
-        "n\_inputs": 2,  
-        "n\_hidden": 4,  
-        "n\_outputs": 1,  
+        "n_inputs": 2,  
+        "n_hidden": 4,  
+        "n_outputs": 1,  
         "epochs": 2000,  
-        "learning\_rate": 0.1  
+        "learning_rate": 0.1  
     },  
     scaling="minmax"  
 )
 
-\# Export to C (automatic quantization)  
-c\_code \= ml\_manager.export\_to\_c("xor\_nn")
+# Export to C (automatic quantization)  
+c_code = ml_manager.export_to_c("xor_nn")
 
-\# Save code  
-with open("xor\_model.h", "w") as f:  
-    f.write(c\_code)
+# Save code  
+with open("xor_model.h", "w") as f:  
+    f.write(c_code)
+
+```
 
 ### **Example 2: Manual Quantization**
 
-from miniml.ml\_runtime import MiniNeuralNetwork
+```python
+from miniml.ml_runtime import MiniNeuralNetwork
 
-\# Create and train model  
-model \= MiniNeuralNetwork(n\_inputs=2, n\_hidden=4, n\_outputs=1)  
+# Create and train model  
+model = MiniNeuralNetwork(n_inputs=2, n_hidden=4, n_outputs=1)  
 model.fit(dataset)
 
-\# Calibration (automatic after fit, but can be manual)  
+# Calibration (automatic after fit, but can be manual)  
 model.calibrate(dataset)
 
-\# Explicit Quantization  
-model.quantize(per\_channel=True)
+# Explicit Quantization  
+model.quantize(per_channel=True)
 
-\# Verify quantization  
+# Verify quantization  
 print(f"Quantized: {model.quantized}")  
-print(f"Act scales: {model.act\_scales}")  
-print(f"W1 shape: {len(model.q\_W1)}x{len(model.q\_W1\[0\])}")
+print(f"Act scales: {model.act_scales}")  
+print(f"W1 shape: {len(model.q_W1)}x{len(model.q_W1[0])}")
+
+```
 
 ### **Example 3: Using CMSISAdapter Directly**
 
-from miniml.ml\_runtime import MiniNeuralNetwork  
-from adapters.cmsis\_nn.adapter import CMSISAdapter
+```python
+from miniml.ml_runtime import MiniNeuralNetwork  
+from adapters.cmsis_nn.adapter import CMSISAdapter
 
-\# Train model  
-model \= MiniNeuralNetwork(n\_inputs=2, n\_hidden=4, n\_outputs=1)  
+# Train model  
+model = MiniNeuralNetwork(n_inputs=2, n_hidden=4, n_outputs=1)  
 model.fit(dataset)  
 model.quantize()
 
-\# Generate CMSIS-NN code  
-adapter \= CMSISAdapter(model)  
-adapter.generate\_c("model\_cmsis.h")
+# Generate CMSIS-NN code  
+adapter = CMSISAdapter(model)  
+adapter.generate_c("model_cmsis.h")
 
 ### **Example 4: Saving and Loading Quantized Model**
 
-\# Save model (includes act\_scales and quantized weights)  
-ml\_manager.save\_model("xor\_nn", "xor\_nn.json")
+# Save model (includes act_scales and quantized weights)  
+ml_manager.save_model("xor_nn", "xor_nn.json")
 
-\# Load model (restores act\_scales)  
-ml\_manager.load\_model("xor\_nn", "xor\_nn.json")
+# Load model (restores act_scales)  
+ml_manager.load_model("xor_nn", "xor_nn.json")
 
-\# Re-quantize if necessary  
-model \= ml\_manager.get\_model("xor\_nn")  
+# Re-quantize if necessary  
+model = ml_manager.get_model("xor_nn")  
 if not model.quantized:  
     model.quantize()
 
-\# Export  
-c\_code \= ml\_manager.export\_to\_c("xor\_nn")
+# Export  
+c_code = ml_manager.export_to_c("xor_nn")
+
+```
 
 ## **Conclusion**
 
@@ -532,7 +563,7 @@ MiniML offers a robust and flexible quantization system for neural networks, wit
 2. **AVR Hybrid Mode**: Ideal for 8-bit Arduino.  
 3. **Native Per-Layer**: Portable and universal.
 
-Quantization reduces model size by \~75% and accelerates inference 2-10x, with typical accuracy loss \< 2%, making it ideal for embedded AI applications.
+Quantization reduces model size by ~75% and accelerates inference 2-10x, with typical accuracy loss < 2%, making it ideal for embedded AI applications.
 
 Last Update: 2024  
 MiniML Version: 1.0.1

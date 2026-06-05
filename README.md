@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="assets/miniml_banner.png" alt="MiniML Engine Banner" width="850">
-</p>
+  <img src="assetsminiml_banner.png" alt="MiniML Engine Banner" width="850">
+<p>
 
 <p align="center">
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.7%2B-blue.svg?style=flat-square&logo=python&logoColor=white" alt="Python Version"></a>
-  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-red.svg?style=flat-square" alt="License: Apache 2.0"></a>
-  <img src="https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg?style=flat-square" alt="Zero Dependencies">
-  <img src="https://img.shields.io/badge/C%2B%2B-PROGMEM%20Ready-orange.svg?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++ Ready">
-  <img src="https://img.shields.io/badge/Platform-Arduino%20%7C%20ESP32%20%7C%20STM32-lightgrey.svg?style=flat-square" alt="Supported Platforms">
-  <img src="https://img.shields.io/badge/Edge%20AI-Deep%20Learning-purple.svg?style=flat-square" alt="Edge AI Deep Learning">
-</p>
+  <a href="https:www.python.orgdownloads"><img src="https:img.shields.iobadgePython-3.7%2B-blue.svg?style=flat-square&logo=python&logoColor=white" alt="Python Version"><a>
+  <a href="https:opensource.orglicensesApache-2.0"><img src="https:img.shields.iobadgeLicense-Apache%202.0-red.svg?style=flat-square" alt="License: Apache 2.0"><a>
+  <img src="https:img.shields.iobadgeDependencies-Zero-brightgreen.svg?style=flat-square" alt="Zero Dependencies">
+  <img src="https:img.shields.iobadgeC%2B%2B-PROGMEM%20Ready-orange.svg?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++ Ready">
+  <img src="https:img.shields.iobadgePlatform-Arduino%20%7C%20ESP32%20%7C%20STM32-lightgrey.svg?style=flat-square" alt="Supported Platforms">
+  <img src="https:img.shields.iobadgeEdge%20AI-Deep%20Learning-purple.svg?style=flat-square" alt="Edge AI Deep Learning">
+<p>
 
 ---
 
@@ -56,18 +56,18 @@ Located in `ml_runtime.py`, this engine is the core for tabular data and simple 
 | **`MiniLinearModel`** | *SGD*. Uses iterative updates. Exports a simple float array for ultra-fast dot-product inference. |
 | **`MiniSVM`** | *Hinge Loss*. Implements a linear decision boundary, perfect for binary classification on hardware lacking a dedicated Floating-Point Unit (FPU). |
 | **`KNearestNeighbors`** | *Lazy Learning*. Exports the entire dataset to Flash memory. Implements an in-place *Insertion Sort* simulating a priority queue to avoid exhausting dynamic RAM. |
-| **`MiniScaler`** | *Preprocessing*. Generates MinMax/Standard normalization routines in C++ (`preprocess_data()`) to stabilize sensor signals prior to inference. |
+| **`MiniScaler`** | *Preprocessing*. Generates MinMaxStandard normalization routines in C++ (`preprocess_data()`) to stabilize sensor signals prior to inference. |
 
 ### **2. MiniTensor (Embedded Deep Learning)**
 
 Located in the `tensor.py` and `layers.py` modules, this is the automatic differentiation (*Autograd*) engine for extracting complex features from time-series, audio, and basic computer vision.
 
-| Layer / Module | Description & C++ Inference Optimization |
+| Layer  Module | Description & C++ Inference Optimization |
 | --- | --- |
-| **`Conv1D` & `Conv2D`** | Spatial/temporal convolutions. The exporter dynamically indexes the geometry and generates nested loops with safe memory reads using `READ_FLOAT` macros. |
+| **`Conv1D` & `Conv2D`** | Spatialtemporal convolutions. The exporter dynamically indexes the geometry and generates nested loops with safe memory reads using `READ_FLOAT` macros. |
 | **`SeparableConv2D`** | *MobileNet-Style*. Splits the convolution into *Depthwise* and *Pointwise* steps. Supports native **Operator Fusion** in C++ to minimize memory access and accelerate inference. |
-| **`ResidualBlock1D`** | *ResNet-Style*. Enables deep networks without vanishing gradients by adding the identity ($y = \mathcal{F}(x) + x$). Implements strict geometric indexing to align dimensions in C++. |
-| **`MaxPool1D/2D`** | Mathematical dimensionality reduction with sliding window management (Kernel/Stride). |
+| **`ResidualBlock1D`** | *ResNet-Style*. Enables deep networks without vanishing gradients by adding the identity ($y = mathcal{F}(x) + x$). Implements strict geometric indexing to align dimensions in C++. |
+| **`MaxPool1D2D`** | Mathematical dimensionality reduction with sliding window management (KernelStride). |
 | **`Flatten` & `Linear`** | Multilayer Perceptron. Supports recursive flattening of dynamic tensors (up to 4D) while maintaining the gradient flow. |
 | **Activations** | `ReLU`, `Sigmoid`, `MSELoss`, `CrossEntropyLoss`. Implemented with *Clip* barriers to prevent mathematical *Overflows* in 8-bit architectures. |
 
@@ -77,38 +77,38 @@ Located in the `tensor.py` and `layers.py` modules, this is the automatic differ
 
 The framework ensures the Separation of Concerns (SoC) principle through its internal managers:
 
-### **\. ml\_manager.py (The Orchestrator)**
+### **. ml_manager.py (The Orchestrator)**
 
 The high-level API that unifies the workflow. It acts as a bridge between the user and the raw algorithms.
 
-* **Intelligent Dual-Core:** Checks for sklearn. If present, it uses it for high-speed training on the PC. If not, it seamlessly switches to ml\_runtime.  
+* **Intelligent Dual-Core:** Checks for sklearn. If present, it uses it for high-speed training on the PC. If not, it seamlessly switches to ml_runtime.  
 * **Automated Pipeline:**  
   1. **Imputation:** Fills missing values (NaN) to prevent crashes.  
   2. **Scaling:** Normalizes data using MiniScaler.  
   3. **Training:** Fits the selected model.  
 * **predict() Polymorphism:** Automatically handles raw input, applies the saved scaler, and runs inference.
 
-### **\. ml\_compat.py (Safety & Compatibility)**
+### **. ml_compat.py (Safety & Compatibility)**
 
 The data guardian. It ensures that the dynamic nature of Python does not break the strict static nature of C.
 
-* **\_flatten\_tree\_to\_arrays():** The most critical function for tree-based models. It traverses the Python dictionary tree structure and serializes it into parallel arrays (C-style), enabling the iterative execution logic required for microcontrollers.  
-* **check\_dims():** strictly validates input dimensions before prediction, preventing index out-of-bounds errors in the generated C code.  
-* **impute\_missing\_values():** Ensures data integrity before it reaches the mathematical core.
+* **_flatten_tree_to_arrays():** The most critical function for tree-based models. It traverses the Python dictionary tree structure and serializes it into parallel arrays (C-style), enabling the iterative execution logic required for microcontrollers.  
+* **check_dims():** strictly validates input dimensions before prediction, preventing index out-of-bounds errors in the generated C code.  
+* **impute_missing_values():** Ensures data integrity before it reaches the mathematical core.
 
-### **\. ml\_factory.py (The Factory Pattern)**
+### **. ml_factory.py (The Factory Pattern)**
 
 Decouples model instantiation from the logic flow.
 
-* **Function:** create\_model(type\_string, params\_dict)  
-* **Purpose:** Allows the system to instantiate complex objects (like RandomForestRegressor) from simple JSON strings. This is vital for the Save/Load system and prevents circular dependencies between modules.
+* **Function:** create_model(type_string, params_dict)  
+* **Purpose:** Allows the system to instantiate complex objects (like RandomForestRegressor) from simple JSON strings. This is vital for the SaveLoad system and prevents circular dependencies between modules.
 
-### *5\. ml\_exporter.py (Serialization & Export)**
+### *5. ml_exporter.py (Serialization & Export)**
 
 Handles the persistence and translation of models.
 
 * **Structure Extraction:** Instead of using Python's pickle (which is insecure and Python-specific), this module extracts the pure mathematical structure (weights, thresholds, topology) into a language-agnostic JSON format.  
-* **Sklearn Interop:** If a model was trained using scikit-learn, this module extracts the internal NumPy arrays (tree\_.value, coef\_) and converts them into the MiniML standard format, allowing you to **export Sklearn models to Arduino C**.
+* **Sklearn Interop:** If a model was trained using scikit-learn, this module extracts the internal NumPy arrays (tree_.value, coef_) and converts them into the MiniML standard format, allowing you to **export Sklearn models to Arduino C**.
 
 ---
 
@@ -122,7 +122,7 @@ Handles the persistence and translation of models.
 
 ## **🚀 Expanded Use Cases (Industrial IoT & Robotics)**
 
-1. **Predictive Maintenance (Acoustics/Vibration):** Using `Conv1D` and `ResidualBlock1D`, a microcontroller can analyze time-windows from an accelerometer to detect anomalies in industrial motors locally (Edge Computing).
+1. **Predictive Maintenance (AcousticsVibration):** Using `Conv1D` and `ResidualBlock1D`, a microcontroller can analyze time-windows from an accelerometer to detect anomalies in industrial motors locally (Edge Computing).
 2. **Sensor Fusion (Soft-Sensors):** By combining low-cost sensors (e.g., DHT11, LDR) and processing them through a **Random Forest** or a **Quantized MLP**, the MCU can predict complex variables without requiring an internet connection.
 3. **Tiny Vision:** Employing `SeparableConv2D`, it is possible to train pattern classifiers for low-resolution arrays (e.g., thermal or small optical cameras), drastically reducing computational load.
 
@@ -137,79 +137,86 @@ Handles the persistence and translation of models.
 
 ### **Real-World Workflow Example (Sensor to Arduino)**
 
+```python
 import miniml
 
-\# 1\. Dataset (3 features from sensors, last column is class)  
-\# \[Temperature, Humidity, Light\_Level, CLASS\]  
-data \= \[  
-    \[25.0, 60.0, 100, 0\], \# Normal  
-    \[26.0, 62.0, 150, 0\],  
-    \[80.0, 20.0, 800, 1\], \# Fire Danger  
-    \[85.0, 15.0, 900, 1\]  
-\]
+# 1. Dataset (3 features from sensors, last column is class)  
+# [Temperature, Humidity, Light_Level, CLASS]  
+data = [  
+    [25.0, 60.0, 100, 0], # Normal  
+    [26.0, 62.0, 150, 0],  
+    [80.0, 20.0, 800, 1], # Fire Danger  
+    [85.0, 15.0, 900, 1]  
+]
 
-\# 2\. Train Pipeline (Handles scaling automatically)  
+# 2. Train Pipeline (Handles scaling automatically)  
 print("Training model...")  
-result \= miniml.train\_pipeline(  
-    model\_name="fire\_detector",  
+result = miniml.train_pipeline(  
+    model_name="fire_detector",  
     dataset=data,  
-    model\_type="DecisionTreeClassifier",  
-    params={"max\_depth": 3},  
-    scaling="minmax" \# Crucial for sensor data normalization  
+    model_type="DecisionTreeClassifier",  
+    params={"max_depth": 3},  
+    scaling="minmax" # Crucial for sensor data normalization  
 )
 
-\# 3\. Predict on PC (Sanity Check)  
-\# Input is raw sensor data. MiniML scales it automatically before prediction.  
-sensor\_input \= \[\[82.0, 18.0, 850\]\]   
-prediction \= miniml.predict("fire\_detector", sensor\_input)  
+# 3. Predict on PC (Sanity Check)  
+# Input is raw sensor data. MiniML scales it automatically before prediction.  
+sensor_input = [[82.0, 18.0, 850]]   
+prediction = miniml.predict("fire_detector", sensor_input)  
 print(f"Prediction (0=Safe, 1=Danger): {prediction}") 
 
-\# 4\. Export to Firmware  
+# 4. Export to Firmware  
 print("Generating C code...")  
-c\_code \= miniml.export\_to\_c("fire\_detector")
+c_code = miniml.export_to_c("fire_detector")
 
-\# 5\. Save to file  
+# 5. Save to file  
 with open("model.h", "w") as f:  
-    f.write(c\_code)
+    f.write(c_code)
+
+```
 
 ## **💾 Generated C Code (Artifact)**
 
-The output is standard C99 code, ready to be included in an Arduino sketch (\#include "model.h").
+The output is standard C99 code, ready to be included in an Arduino sketch (#include "model.h").
 
-// MiniML Export: fire\_detector  
-// Preprocessing (MinMax Scaler baked in)  
-void preprocess\_data(float row\[\]) {  
-  // Hardcoded values from training phase  
-  row\[0\] \= (row\[0\] \- 25.0) / 60.0;   
-  row\[1\] \= (row\[1\] \- 15.0) / 47.0;   
-  row\[2\] \= (row\[2\] \- 100.0) / 800.0;  
+
+```c
+ // MiniML Export: fire_detector  
+ // Preprocessing (MinMax Scaler baked in)  
+void preprocess_data(float row[]) {  
+   // Hardcoded values from training phase  
+  row[0] = (row[0] - 25.0)  60.0;   
+  row[1] = (row[1] - 15.0)  47.0;   
+  row[2] = (row[2] - 100.0)  800.0;  
 }
 
-// Model Arrays (Flattened Tree)  
-const int tree\_feature\_index\[\] \= {0, 2, \-1, \-1, \-1};  
-const float tree\_threshold\[\] \= {0.5, 0.8, 0.0, 0.0, 0.0};  
-const int tree\_left\[\] \= {1, 3, \-1, \-1, \-1};  
-const int tree\_right\[\] \= {2, 4, \-1, \-1, \-1};  
-const int tree\_value\[\] \= {0, 0, 0, 1, 0}; // 0=Safe, 1=Danger
+ Model Arrays (Flattened Tree)  
+const int tree_feature_index[] = {0, 2, -1, -1, -1};  
+const float tree_threshold[] = {0.5, 0.8, 0.0, 0.0, 0.0};  
+const int tree_left[] = {1, 3, -1, -1, -1};  
+const int tree_right[] = {2, 4, -1, -1, -1};  
+const int tree_value[] = {0, 0, 0, 1, 0};  0=Safe, 1=Danger
 
-// Inference Function (Iterative \- Stack Safe)  
-int predict\_model(float row\[\]) {  
-  int node\_index \= 0;  
-  while (tree\_feature\_index\[node\_index\] \!= \-1) {  
-     if (row\[tree\_feature\_index\[node\_index\]\] \<= tree\_threshold\[node\_index\]) {  
-        node\_index \= tree\_left\[node\_index\];  
+ // Inference Function (Iterative - Stack Safe)  
+int predict_model(float row[]) {  
+  int node_index = 0;  
+  while (tree_feature_index[node_index] != -1) {  
+     if (row[tree_feature_index[node_index]] <= tree_threshold[node_index]) {  
+        node_index = tree_left[node_index];  
      } else {  
-        node\_index \= tree\_right\[node\_index\];  
+        node_index = tree_right[node_index];  
      }  
   }  
-  return tree\_value\[node\_index\];  
+  return tree_value[node_index];  
 }
 
-// Unified Entry Point  
-float predict(float inputs\[\]) {  
-  preprocess\_data(inputs); // Modifies in-place  
-  return (float)predict\_model(inputs);  
+ // Unified Entry Point  
+float predict(float inputs[]) {  
+  preprocess_data(inputs);  Modifies in-place  
+  return (float)predict_model(inputs);  
 }
+
+```
 
 ---
 
@@ -243,7 +250,7 @@ model.quantize()
 from miniml.exporters import cpp_writer
 cpp_code = cpp_writer.generate_cpp_code(model, input_shape=(1, 1, 8))
 
-# 5. Package Industrial Library (PlatformIO / Arduino)
+# 5. Package Industrial Library (PlatformIO  Arduino)
 LibraryPackager.create_arduino_zip(
     model_name="ResNet_Vibration_Detector",
     cpp_code=cpp_code,
@@ -277,16 +284,16 @@ pip install miniml-engine
 Contributions are highly welcome. MiniML's mission is to strictly maintain its "zero dependencies" philosophy and low-level optimization.
 
 1. Fork the Project.
-2. Create your Feature Branch (`git checkout -b feature/NewOptimization`).
+2. Create your Feature Branch (`git checkout -b featureNewOptimization`).
 3. Commit your Changes (`git commit -m 'Added new feature'`).
-4. Push to the Branch (`git push origin feature/NewOptimization`).
+4. Push to the Branch (`git push origin featureNewOptimization`).
 5. Open a Pull Request.
 
 ## **📄 License and Documentation**
 
 Distributed under the **Apache License 2.0**. Free for academic, commercial, and industrial use, guaranteeing open-source traceability. See the `LICENSE` file for more information.
 
-The documentation is under development. Documentation on how to use the library, how to take advantage of Arduino's memory safety features, and its syntax will be uploaded routinely to the docs folder. Thank you for your patience!
+For detailed information on how the framework is built and how to use it, please consult the official documentation in docs. Thank you for visiting this repository!
 
 ---
 
@@ -333,18 +340,18 @@ Ubicado en `ml_runtime.py`, este motor es el corazón para datos tabulares y se�
 | **`MiniLinearModel`** | *SGD*. Utiliza actualizaciones iterativas. Exporta un arreglo simple de flotantes para una inferencia ultra-rápida por producto punto. |
 | **`MiniSVM`** | *Hinge Loss*. Implementa un límite de decisión lineal, perfecto para clasificación binaria en hardware sin unidad de coma flotante (FPU) dedicada. |
 | **`KNearestNeighbors`** | *Lazy Learning*. Exporta el dataset completo a Flash. Implementa un *Insertion Sort* in-place simulando una cola de prioridad para no agotar la RAM dinámica. |
-| **`MiniScaler`** | *Preprocesamiento*. Genera rutinas de normalización MinMax/Standard en C++ (`preprocess_data()`) para estabilizar las señales de los sensores antes de la inferencia. |
+| **`MiniScaler`** | *Preprocesamiento*. Genera rutinas de normalización MinMaxStandard en C++ (`preprocess_data()`) para estabilizar las señales de los sensores antes de la inferencia. |
 
 ### **2. MiniTensor (Embedded Deep Learning)**
 
 Ubicado en los módulos `tensor.py` y `layers.py`, este es el motor de diferenciación automática (*Autograd*) para la extracción de características complejas en series temporales, audio y visión artificial básica.
 
-| Capa / Módulo | Descripción y Optimización de Inferencia en C++ |
+| Capa  Módulo | Descripción y Optimización de Inferencia en C++ |
 | --- | --- |
-| **`Conv1D` & `Conv2D`** | Convoluciones espaciales/temporales. El exportador indexa la geometría dinámicamente y genera bucles anidados con lectura segura mediante macros `READ_FLOAT`. |
+| **`Conv1D` & `Conv2D`** | Convoluciones espacialestemporales. El exportador indexa la geometría dinámicamente y genera bucles anidados con lectura segura mediante macros `READ_FLOAT`. |
 | **`SeparableConv2D`** | *MobileNet-Style*. Divide la convolución en *Depthwise* y *Pointwise*. Soporta **Operator Fusion** nativo en C++ para minimizar el acceso a memoria y acelerar la inferencia. |
-| **`ResidualBlock1D`** | *ResNet-Style*. Permite redes profundas sin desvanecimiento de gradiente sumando la identidad ($y = \mathcal{F}(x) + x$). Implementa indexación geométrica estricta para alinear las dimensiones en C++. |
-| **`MaxPool1D/2D`** | Reducción de dimensionalidad matemática con gestión de ventanas deslizantes (Kernel/Stride). |
+| **`ResidualBlock1D`** | *ResNet-Style*. Permite redes profundas sin desvanecimiento de gradiente sumando la identidad ($y = mathcal{F}(x) + x$). Implementa indexación geométrica estricta para alinear las dimensiones en C++. |
+| **`MaxPool1D2D`** | Reducción de dimensionalidad matemática con gestión de ventanas deslizantes (KernelStride). |
 | **`Flatten` & `Linear`** | Perceptrón Multicapa. Soporta el aplanado recursivo de tensores dinámicos (hasta 4D) manteniendo el flujo del gradiente. |
 | **Activaciones** | `ReLU`, `Sigmoid`, `MSELoss`, `CrossEntropyLoss`. Implementadas con barreras de *Clip* para evitar *Overflows* matemáticos en arquitecturas de 8-bits. |
 
@@ -354,11 +361,11 @@ Ubicado en los módulos `tensor.py` y `layers.py`, este es el motor de diferenci
 
 El framework asegura el principio de Separación de Responsabilidades a través de sus gestores internos:
 
-### **\. ml\_manager.py (El Orquestador)**
+### **. ml_manager.py (El Orquestador)**
 
 La API de alto nivel que unifica el flujo de trabajo. Actúa como un puente entre el usuario y los algoritmos base.
 
-* **Doble Núcleo Inteligente:** Verifica la presencia de **sklearn**. Si está, lo usa para un entrenamiento de alta velocidad en el PC. Si no, cambia sin problemas a **ml\_runtime**.  
+* **Doble Núcleo Inteligente:** Verifica la presencia de **sklearn**. Si está, lo usa para un entrenamiento de alta velocidad en el PC. Si no, cambia sin problemas a **ml_runtime**.  
 * **Pipeline Automatizado:**  
   1. **Imputación:** Rellena los valores faltantes (NaN) para prevenir fallos.  
   2. **Escalado:** Normaliza los datos usando **MiniScaler**.  
@@ -367,31 +374,31 @@ La API de alto nivel que unifica el flujo de trabajo. Actúa como un puente entr
 
 ---
 
-### **\. ml\_compat.py (Seguridad y Compatibilidad)**
+### **. ml_compat.py (Seguridad y Compatibilidad)**
 
 El guardián de los datos. Asegura que la naturaleza dinámica de Python no rompa la estricta naturaleza estática de C.
 
-* **\_flatten\_tree\_to\_arrays():** La función más crítica para modelos basados en árboles. Recorre la estructura de árbol del diccionario de Python y la serializa en arrays paralelos (estilo C), habilitando la lógica de ejecución iterativa requerida para microcontroladores.  
-* **check\_dims():** Valida estrictamente las dimensiones de entrada antes de la predicción, previniendo errores de índice fuera de límites en el código C generado.  
-* **impute\_missing\_values():** Asegura la integridad de los datos antes de que lleguen al núcleo matemático.
+* **_flatten_tree_to_arrays():** La función más crítica para modelos basados en árboles. Recorre la estructura de árbol del diccionario de Python y la serializa en arrays paralelos (estilo C), habilitando la lógica de ejecución iterativa requerida para microcontroladores.  
+* **check_dims():** Valida estrictamente las dimensiones de entrada antes de la predicción, previniendo errores de índice fuera de límites en el código C generado.  
+* **impute_missing_values():** Asegura la integridad de los datos antes de que lleguen al núcleo matemático.
 
 ---
 
-### **\. ml\_factory.py (El Patrón Factory)**
+### **. ml_factory.py (El Patrón Factory)**
 
 Desacopla la instanciación del modelo del flujo de lógica.
 
-* **Función:** $\\text{create\\\_model}(\\text{type\\\_string}, \\text{params\\\_dict})$  
-* **Propósito:** Permite al sistema instanciar objetos complejos (como RandomForestRegressor) a partir de simples cadenas JSON. Esto es vital para el sistema de Guardar/Cargar y previene dependencias circulares entre módulos.
+* **Función:** $text{create_model}(text{type_string}, text{params_dict})$  
+* **Propósito:** Permite al sistema instanciar objetos complejos (como RandomForestRegressor) a partir de simples cadenas JSON. Esto es vital para el sistema de GuardarCargar y previene dependencias circulares entre módulos.
 
 ---
 
-### **\. ml\_exporter.py (Serialización y Exportación)**
+### **. ml_exporter.py (Serialización y Exportación)**
 
 Maneja la persistencia y traducción de modelos.
 
 * **Extracción de Estructura:** En lugar de usar **pickle** de Python (que es inseguro y específico de Python), este módulo extrae la estructura matemática pura (pesos, umbrales, topología) a un **formato JSON agnóstico al lenguaje**.  
-* **Interoperabilidad con Sklearn:** Si un modelo fue entrenado usando **scikit-learn**, este módulo extrae los arrays internos de NumPy ($\\text{tree\\\_value, coef\\\_}$) y los convierte al formato estándar de MiniML, permitiendo **exportar modelos de Sklearn a C de Arduino**.
+* **Interoperabilidad con Sklearn:** Si un modelo fue entrenado usando **scikit-learn**, este módulo extrae los arrays internos de NumPy ($text{tree_value, coef_}$) y los convierte al formato estándar de MiniML, permitiendo **exportar modelos de Sklearn a C de Arduino**.
 
 ---
 
@@ -405,7 +412,7 @@ Maneja la persistencia y traducción de modelos.
 
 ## **🚀 Casos de Uso Expandidos (IoT Industrial & Robótica)**
 
-1. **Mantenimiento Predictivo (Acústica/Vibración):** Utilizando `Conv1D` y `ResidualBlock1D`, un microcontrolador puede analizar ventanas temporales de un acelerómetro y detectar anomalías en motores industriales de forma local (Edge Computing).
+1. **Mantenimiento Predictivo (AcústicaVibración):** Utilizando `Conv1D` y `ResidualBlock1D`, un microcontrolador puede analizar ventanas temporales de un acelerómetro y detectar anomalías en motores industriales de forma local (Edge Computing).
 2. **Fusión de Sensores (Soft-Sensors):** Combinando sensores de bajo costo (ej. DTH11, LDR) y procesándolos mediante un **Random Forest** o un **MLP Cuantizado**, el MCU puede predecir variables complejas sin requerir conexión a internet.
 3. **Tiny Vision:** Empleando `SeparableConv2D`, es posible entrenar clasificadores de patrones para matrices de baja resolución (ej. cámaras térmicas u ópticas pequeñas) reduciendo drásticamente la carga computacional.
 
@@ -413,142 +420,146 @@ Maneja la persistencia y traducción de modelos.
 
 ### **La Diferencia de fit()**
 
-**Crucial:** MiniML utiliza un formato de conjunto de datos unificado para $\\text{fit}()$, a diferencia de Scikit-learn.
+**Crucial:** MiniML utiliza un formato de conjunto de datos unificado para $text{fit}()$, a diferencia de Scikit-learn.
 
-* **Sklearn:** $\\text{fit}(X, y)$ (Dos arrays separados).  
-* **MiniML:** $\\text{fit}(\\text{dataset})$ (Una lista de listas, donde la **última columna** es el objetivo).
+* **Sklearn:** $text{fit}(X, y)$ (Dos arrays separados).  
+* **MiniML:** $text{fit}(text{dataset})$ (Una lista de listas, donde la **última columna** es el objetivo).
 
 ### **Ejemplo de Flujo de Trabajo en el Mundo Real (Sensor a Arduino)**
 
 Python
 
+```python
 import miniml
 
-\# 1\. Conjunto de Datos (3 características de sensores, la última columna es la clase)
+# 1. Conjunto de Datos (3 características de sensores, la última columna es la clase)
 
-\# \[Temperatura, Humedad, Nivel\_Luz, CLASE\]
+# [Temperatura, Humedad, Nivel_Luz, CLASE]
 
-data \= \[
+data = [
 
-    \[25.0, 60.0, 100, 0\], \# Normal
+    [25.0, 60.0, 100, 0], # Normal
 
-    \[26.0, 62.0, 150, 0\],
+    [26.0, 62.0, 150, 0],
 
-    \[80.0, 20.0, 800, 1\], \# Peligro de Incendio
+    [80.0, 20.0, 800, 1], # Peligro de Incendio
 
-    \[85.0, 15.0, 900, 1\]
+    [85.0, 15.0, 900, 1]
 
-\]
+]
 
-\# 2\. Pipeline de Entrenamiento (Maneja el escalado automáticamente)
+# 2. Pipeline de Entrenamiento (Maneja el escalado automáticamente)
 
 print("Entrenando modelo...")
 
-result \= miniml.train\_pipeline(
+result = miniml.train_pipeline(
 
-    model\_name="fire\_detector",
+    model_name="fire_detector",
 
     dataset=data,
 
-    model\_type="DecisionTreeClassifier",
+    model_type="DecisionTreeClassifier",
 
-    params={"max\_depth": 3},
+    params={"max_depth": 3},
 
-    scaling="minmax" \# Crucial para la normalización de datos de sensores
+    scaling="minmax" # Crucial para la normalización de datos de sensores
 
 )
 
-\# 3\. Predicción en PC (Verificación de Sanidad)
+# 3. Predicción en PC (Verificación de Sanidad)
 
-\# La entrada son datos de sensor crudos. MiniML los escala automáticamente antes de la predicción.
+# La entrada son datos de sensor crudos. MiniML los escala automáticamente antes de la predicción.
 
-sensor\_input \= \[\[82.0, 18.0, 850\]\]
+sensor_input = [[82.0, 18.0, 850]]
 
-prediction \= miniml.predict("fire\_detector", sensor\_input)
+prediction = miniml.predict("fire_detector", sensor_input)
 
 print(f"Predicción (0=Seguro, 1=Peligro): {prediction}")
 
-\# 4\. Exportar al Firmware
+# 4. Exportar al Firmware
 
 print("Generando código C...")
 
-c\_code \= miniml.export\_to\_c("fire\_detector")
+c_code = miniml.export_to_c("fire_detector")
 
-\# 5\. Guardar en archivo
+# 5. Guardar en archivo
 
 with open("model.h", "w") as f:
 
-    f.write(c\_code)
+    f.write(c_code)
+
+```
 
 ---
 
 ## **💾 Código C Generado (Artifacto)**
 
-La salida es código C99 estándar, listo para ser incluido en un sketch de Arduino (\#include "model.h").
+La salida es código C99 estándar, listo para ser incluido en un sketch de Arduino (#include "model.h").
 
-C
+```c
+ // Exportación MiniML: fire_detector
 
-// Exportación MiniML: fire\_detector
+ // Preprocesamiento (Escalador MinMax incorporado)
 
-// Preprocesamiento (Escalador MinMax incorporado)
+void preprocess_data(float row[]) {
 
-void preprocess\_data(float row\[\]) {
+   // Valores codificados (Hardcoded) de la fase de entrenamiento
 
-  // Valores codificados (Hardcoded) de la fase de entrenamiento
+  row[0] = (row[0] - 25.0)  60.0;
 
-  row\[0\] \= (row\[0\] \- 25.0) / 60.0;
+  row[1] = (row[1] - 15.0)  47.0;
 
-  row\[1\] \= (row\[1\] \- 15.0) / 47.0;
-
-  row\[2\] \= (row\[2\] \- 100.0) / 800.0;
+  row[2] = (row[2] - 100.0)  800.0;
 
 }
 
-// Arrays del Modelo (Árbol Aplanado)
+ // Arrays del Modelo (Árbol Aplanado)
 
-const int tree\_feature\_index\[\] \= {0, 2, \-1, \-1, \-1};
+const int tree_feature_index[] = {0, 2, -1, -1, -1};
 
-const float tree\_threshold\[\] \= {0.5, 0.8, 0.0, 0.0, 0.0};
+const float tree_threshold[] = {0.5, 0.8, 0.0, 0.0, 0.0};
 
-const int tree\_left\[\] \= {1, 3, \-1, \-1, \-1};
+const int tree_left[] = {1, 3, -1, -1, -1};
 
-const int tree\_right\[\] \= {2, 4, \-1, \-1, \-1};
+const int tree_right[] = {2, 4, -1, -1, -1};
 
-const int tree\_value\[\] \= {0, 0, 0, 1, 0}; // 0=Seguro, 1=Peligro
+const int tree_value[] = {0, 0, 0, 1, 0};  0=Seguro, 1=Peligro
 
-// Función de Inferencia (Iterativa \- Segura para la Pila)
+ // Función de Inferencia (Iterativa - Segura para la Pila)
 
-int predict\_model(float row\[\]) {
+int predict_model(float row[]) {
 
-  int node\_index \= 0;
+  int node_index = 0;
 
-  while (tree\_feature\_index\[node\_index\] \!= \-1) {
+  while (tree_feature_index[node_index] != -1) {
 
-     if (row\[tree\_feature\_index\[node\_index\]\] \<= tree\_threshold\[node\_index\]) {
+     if (row[tree_feature_index[node_index]] <= tree_threshold[node_index]) {
 
-        node\_index \= tree\_left\[node\_index\];
+        node_index = tree_left[node_index];
 
      } else {
 
-        node\_index \= tree\_right\[node\_index\];
+        node_index = tree_right[node_index];
 
      }
 
   }
 
-  return tree\_value\[node\_index\];
+  return tree_value[node_index];
 
 }
 
-// Punto de Entrada Unificado
+ // Punto de Entrada Unificado
 
-float predict(float inputs\[\]) {
+float predict(float inputs[]) {
 
-  preprocess\_data(inputs); // Modifica in-place (en el mismo lugar)
+  preprocess_data(inputs);  Modifica in-place (en el mismo lugar)
 
-  return (float)predict\_model(inputs);
+  return (float)predict_model(inputs);
 
 }
+
+```
 
 ---
 
@@ -582,7 +593,7 @@ model.quantize()
 from miniml.exporters import cpp_writer
 cpp_code = cpp_writer.generate_cpp_code(model, input_shape=(1, 1, 8))
 
-# 5. Empaquetar Librería Industrial (PlatformIO / Arduino)
+# 5. Empaquetar Librería Industrial (PlatformIO  Arduino)
 LibraryPackager.create_arduino_zip(
     model_name="ResNet_Vibration_Detector",
     cpp_code=cpp_code,
@@ -616,13 +627,13 @@ pip install miniml-engine
 Las contribuciones son bienvenidas. MiniML tiene como misión mantener su filosofía estricta de "cero dependencias" y optimización a bajo nivel.
 
 1. Haz un *Fork* del Proyecto.
-2. Crea tu rama (`git checkout -b feature/NuevaOptimizacion`).
+2. Crea tu rama (`git checkout -b featureNuevaOptimizacion`).
 3. Confirma tus cambios (`git commit -m 'Añadida nueva característica'`).
-4. Sube la rama (`git push origin feature/NuevaOptimizacion`).
+4. Sube la rama (`git push origin featureNuevaOptimizacion`).
 5. Abre un *Pull Request*.
 
 ## **📄 Licencia y Documentación**
 
 Distribuido bajo la Licencia **Apache License 2.0**. Libre para uso académico, comercial e industrial garantizando la trazabilidad open-source. Consulta el archivo `LICENSE` para más información.
 
-La documentación está en desarrollo, dentro de la carpeta docs se irán subiendo de forma rutinaria la documentación sobre como usar la librería, como aprovechar el uso de seguridad de memoria en Arduino y su sintaxis. ¡Muchas gracias por la espera!
+Para saber a detalle cómo se construye el framework y cómo usarlo, consulta la documentación oficial dentro de docs. ¡Muchas gracias por visitar este repositorio!
