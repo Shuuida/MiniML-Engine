@@ -537,6 +537,9 @@ model.quantize()
 adapter = CMSISAdapter(model)  
 adapter.generate_c("model_cmsis.h")
 
+```
+
+```python
 ### **Example 4: Saving and Loading Quantized Model**
 
 # Save model (includes act_scales and quantized weights)  

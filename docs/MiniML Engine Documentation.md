@@ -1142,14 +1142,14 @@ If the C++ were to take the int8_t matrix and copy it to a temporary float array
 void predict_layer1(const float* input, float* output) {  
     int weight_idx = 0;  
       
-     Iterate over each output neuron (Channel)  
+    // Iterate over each output neuron (Channel)  
     for (int out_n = 0; out_n < 4; out_n++) {  
         float sum = 0.0f;  
           
-         Read the specific scale for this channel from Flash  
+        // Read the specific scale for this channel from Flash  
         float current_scale = pgm_read_float_near(&layer1_scales[out_n]);  
           
-         Dot Product  
+        // Dot Product  
         for (int in_n = 0; in_n < 8; in_n++) {  
              // 1. Read A SINGLE BYTE of weight from Flash (O(1) in RAM)  
             int8_t weight_q = pgm_read_byte_near(&layer1_weights[weight_idx]);  
@@ -1162,7 +1162,7 @@ void predict_layer1(const float* input, float* output) {
             weight_idx++;  
         }  
           
-         Add bias and apply activation (e.g., ReLU)  
+        // Add bias and apply activation (e.g., ReLU)  
         sum += pgm_read_float_near(&layer1_biases[out_n]);  
         output[out_n] = (sum > 0) ? sum : 0.0f;  
     }  
@@ -1201,7 +1201,7 @@ Since PROGMEM data is not in the RAM address space, you cannot read it using sta
 extern const int8_t layer1_weights[4096] PROGMEM;
 
  // 2. Safe Read in Inference Loop (.cpp)  
- Instead of: int8_t w = layer1_weights[i]; (Which would read garbage)  
+ // Instead of: int8_t w = layer1_weights[i]; (Which would read garbage)  
 int8_t w = pgm_read_byte_near(&layer1_weights[i]);  
 float b  = pgm_read_float_near(&layer1_biases[n]);
 
