@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="assetsminiml_banner.png" alt="MiniML Engine Banner" width="850">
-<p>
+  <img src="assets/miniml_banner.png" alt="MiniML Engine Banner" width="850">
+</p>
 
 <p align="center">
-  <a href="https:www.python.orgdownloads"><img src="https:img.shields.iobadgePython-3.7%2B-blue.svg?style=flat-square&logo=python&logoColor=white" alt="Python Version"><a>
-  <a href="https:opensource.orglicensesApache-2.0"><img src="https:img.shields.iobadgeLicense-Apache%202.0-red.svg?style=flat-square" alt="License: Apache 2.0"><a>
-  <img src="https:img.shields.iobadgeDependencies-Zero-brightgreen.svg?style=flat-square" alt="Zero Dependencies">
-  <img src="https:img.shields.iobadgeC%2B%2B-PROGMEM%20Ready-orange.svg?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++ Ready">
-  <img src="https:img.shields.iobadgePlatform-Arduino%20%7C%20ESP32%20%7C%20STM32-lightgrey.svg?style=flat-square" alt="Supported Platforms">
-  <img src="https:img.shields.iobadgeEdge%20AI-Deep%20Learning-purple.svg?style=flat-square" alt="Edge AI Deep Learning">
-<p>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.7%2B-blue.svg?style=flat-square&logo=python&logoColor=white" alt="Python Version"></a>
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-red.svg?style=flat-square" alt="License: Apache 2.0"></a>
+  <img src="https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg?style=flat-square" alt="Zero Dependencies">
+  <img src="https://img.shields.io/badge/C%2B%2B-PROGMEM%20Ready-orange.svg?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++ Ready">
+  <img src="https://img.shields.io/badge/Platform-Arduino%20%7C%20ESP32%20%7C%20STM32-lightgrey.svg?style=flat-square" alt="Supported Platforms">
+  <img src="https://img.shields.io/badge/Edge%20AI-Deep%20Learning-purple.svg?style=flat-square" alt="Edge AI Deep Learning">
+</p>
 
 ---
 
@@ -77,7 +77,7 @@ Located in the `tensor.py` and `layers.py` modules, this is the automatic differ
 
 The framework ensures the Separation of Concerns (SoC) principle through its internal managers:
 
-### **. ml_manager.py (The Orchestrator)**
+### **1. ml_manager.py (The Orchestrator)**
 
 The high-level API that unifies the workflow. It acts as a bridge between the user and the raw algorithms.
 
@@ -88,7 +88,7 @@ The high-level API that unifies the workflow. It acts as a bridge between the us
   3. **Training:** Fits the selected model.  
 * **predict() Polymorphism:** Automatically handles raw input, applies the saved scaler, and runs inference.
 
-### **. ml_compat.py (Safety & Compatibility)**
+### **2. ml_compat.py (Safety & Compatibility)**
 
 The data guardian. It ensures that the dynamic nature of Python does not break the strict static nature of C.
 
@@ -96,14 +96,14 @@ The data guardian. It ensures that the dynamic nature of Python does not break t
 * **check_dims():** strictly validates input dimensions before prediction, preventing index out-of-bounds errors in the generated C code.  
 * **impute_missing_values():** Ensures data integrity before it reaches the mathematical core.
 
-### **. ml_factory.py (The Factory Pattern)**
+### **3. ml_factory.py (The Factory Pattern)**
 
 Decouples model instantiation from the logic flow.
 
 * **Function:** create_model(type_string, params_dict)  
 * **Purpose:** Allows the system to instantiate complex objects (like RandomForestRegressor) from simple JSON strings. This is vital for the SaveLoad system and prevents circular dependencies between modules.
 
-### *5. ml_exporter.py (Serialization & Export)**
+### *4. ml_exporter.py (Serialization & Export)**
 
 Handles the persistence and translation of models.
 
@@ -185,9 +185,9 @@ The output is standard C99 code, ready to be included in an Arduino sketch (#inc
  // Preprocessing (MinMax Scaler baked in)  
 void preprocess_data(float row[]) {  
    // Hardcoded values from training phase  
-  row[0] = (row[0] - 25.0)  60.0;   
-  row[1] = (row[1] - 15.0)  47.0;   
-  row[2] = (row[2] - 100.0)  800.0;  
+  row[0] = (row[0] - 25.0) / 60.0;   
+  row[1] = (row[1] - 15.0) / 47.0;   
+  row[2] = (row[2] - 100.0) / 800.0;  
 }
 
  Model Arrays (Flattened Tree)  
@@ -361,7 +361,7 @@ Ubicado en los módulos `tensor.py` y `layers.py`, este es el motor de diferenci
 
 El framework asegura el principio de Separación de Responsabilidades a través de sus gestores internos:
 
-### **. ml_manager.py (El Orquestador)**
+### **1. ml_manager.py (El Orquestador)**
 
 La API de alto nivel que unifica el flujo de trabajo. Actúa como un puente entre el usuario y los algoritmos base.
 
@@ -374,7 +374,7 @@ La API de alto nivel que unifica el flujo de trabajo. Actúa como un puente entr
 
 ---
 
-### **. ml_compat.py (Seguridad y Compatibilidad)**
+### **2. ml_compat.py (Seguridad y Compatibilidad)**
 
 El guardián de los datos. Asegura que la naturaleza dinámica de Python no rompa la estricta naturaleza estática de C.
 
@@ -384,7 +384,7 @@ El guardián de los datos. Asegura que la naturaleza dinámica de Python no romp
 
 ---
 
-### **. ml_factory.py (El Patrón Factory)**
+### **3. ml_factory.py (El Patrón Factory)**
 
 Desacopla la instanciación del modelo del flujo de lógica.
 
@@ -393,12 +393,12 @@ Desacopla la instanciación del modelo del flujo de lógica.
 
 ---
 
-### **. ml_exporter.py (Serialización y Exportación)**
+### **4. ml_exporter.py (Serialización y Exportación)**
 
 Maneja la persistencia y traducción de modelos.
 
 * **Extracción de Estructura:** En lugar de usar **pickle** de Python (que es inseguro y específico de Python), este módulo extrae la estructura matemática pura (pesos, umbrales, topología) a un **formato JSON agnóstico al lenguaje**.  
-* **Interoperabilidad con Sklearn:** Si un modelo fue entrenado usando **scikit-learn**, este módulo extrae los arrays internos de NumPy ($text{tree_value, coef_}$) y los convierte al formato estándar de MiniML, permitiendo **exportar modelos de Sklearn a C de Arduino**.
+* **Interoperabilidad con Sklearn:** Si un modelo fue entrenado usando **scikit-learn**, este módulo extrae los arrays internos de NumPy ($$text{tree_value, coef_}$) y los convierte al formato estándar de MiniML, permitiendo **exportar modelos de Sklearn a C de Arduino**.
 
 ---
 
@@ -502,14 +502,10 @@ La salida es código C99 estándar, listo para ser incluido en un sketch de Ardu
  // Preprocesamiento (Escalador MinMax incorporado)
 
 void preprocess_data(float row[]) {
-
-   // Valores codificados (Hardcoded) de la fase de entrenamiento
-
-  row[0] = (row[0] - 25.0)  60.0;
-
-  row[1] = (row[1] - 15.0)  47.0;
-
-  row[2] = (row[2] - 100.0)  800.0;
+  // Valores codificados (Hardcoded) de la fase de entrenamiento
+  row[0] = (row[0] - 25.0) / 60.0;   
+  row[1] = (row[1] - 15.0) / 47.0;   
+  row[2] = (row[2] - 100.0) / 800.0;
 
 }
 
