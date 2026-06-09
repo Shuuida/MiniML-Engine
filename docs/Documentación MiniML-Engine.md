@@ -2,7 +2,7 @@
 
 ### "Train on PC, Run on Metal."
 
-**Versión:** 1.1.0
+**Versión:** 1.1.2
 
 **Autor:** Michego Takoro "Wilner Manzanares"
 

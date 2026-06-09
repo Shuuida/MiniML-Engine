@@ -15,7 +15,7 @@
 
 # **🧠 MiniML Engine (Powered by MiniTensor)**
 
-**Version:** 1.1.0 - *Industrial Edge AI Release* 
+**Version:** 1.1.2 - *Industrial Edge AI Release* 
 **Architecture:** Zero-Dependency Python Core + Autograd Engine + Native C++ Export (PROGMEM)
 
 **Philosophy:** "Train on PC, Run on Metal"
@@ -299,7 +299,7 @@ For detailed information on how the framework is built and how to use it, please
 
 # **🧠 MiniML Engine (Powered by MiniTensor)**
 
-**Versión:** 1.1.0 - *Industrial Edge AI Release* 
+**Versión:** 1.1.2 - *Industrial Edge AI Release* 
 **Arquitectura:** Núcleo de Python (Zero-Dependency) + Motor Autograd + Exportación a C++ Nativo (PROGMEM)
 
 **Filosofía:** "Train on PC, Run on Metal"

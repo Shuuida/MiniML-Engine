@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="miniml",
-    version="1.1.0",
+    version="1.1.2",
     author="Wilner Manzanares (Michego Takoro 'Shuuida')",
     description="Edge AI and Embedded Machine Learning Framework (Zero-Dependencies)",
     packages=find_packages(include=['miniml*', 'estimators*', 'adapters*', 'miniml_cli*']),
