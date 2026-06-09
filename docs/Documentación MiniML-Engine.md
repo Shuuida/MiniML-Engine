@@ -1524,6 +1524,47 @@ El código C++ generado por MiniML es altamente portable porque utiliza bucles `
 
 En futuras actualizaciones, se considerará implementar la Vectorización Explícita para el módulo de empaquetado y exportación. Además de darle soporte al rust_writter para que sea compatible con todos los módulos disponibles de Deep Learning actualmente.
 
+
+### 7. On-Device Transfer Learning (SGD Estático en el Borde)
+
+El "mayor salto" del Edge Computing no es solo ejecutar inferencia localmente, sino lograr que el microcontrolador se adapte y aprenda de su entorno físico en tiempo real, sin depender de un servidor central. A partir de la versión 1.1.0 (En la actualización 1.1.2), el transpilador de **MiniML Engine** introduce la capacidad de **Aprendizaje por Transferencia en el Dispositivo (On-Device Learning)** mediante un algoritmo de Descenso de Gradiente Estocástico (SGD) hiper-optimizado.
+
+Implementar entrenamiento en el "Bare Metal" tradicionalmente destruiría la SRAM debido a la necesidad de almacenar grafos computacionales dinámicos y tensores de retropropagación (Autograd). MiniML resuelve esto trasladando el cálculo pesado a la PC y exportando únicamente la aritmética final simplificada.
+
+#### A. El "Semáforo de Memoria" (Layer Freezing y SRAM)
+
+La arquitectura de transferencia de aprendizaje en MiniML se rige por la filosofía: *"El extractor de características es universal y estático; el clasificador es local y mutable"*.
+
+Durante el diseño en Python, el usuario puede invocar el método `.unfreeze()` sobre la capa final del modelo (típicamente una capa `Linear`), manteniendo el resto de la red convolucional congelada. Al exportar a C++ con la bandera `on_device_learning=True`, el transpilador actúa como un semáforo de memoria:
+
+1. **Extractor Inmutable (ROM):** Todas las capas congeladas (`Conv1D`, `SeparableConv2D`, etc.) se empaquetan rígidamente con la directiva `PROGMEM` (y cuantizadas a `INT8` si se requiere). Actúan como una función matemática tallada en piedra que reduce el ruido del sensor a un vector latente denso.
+2. **Capa Adaptativa (SRAM):** El transpilador intercepta la capa `Linear` descongelada y **omite** el uso de `const` y `PROGMEM`. Sus matrices de pesos y sesgos se declaran como variables `float` estándar pre-asignadas en la memoria dinámica (SRAM).
+
+#### B. El Motor SGD Estático (Matemática Pre-Calculada)
+
+El microcontrolador no ejecuta un motor Autograd complejo. En su lugar, el exportador de Python lee qué función de pérdida (`MSELoss` o `CrossEntropyLoss`) se definió en el host, y resuelve la derivada analíticamente durante la transpilación.
+
+El C++ generado inyecta una nueva función llamada `retrain_step(input, target)`. Esta función contiene bucles `for` matemáticamente purificados que implementan la regla de actualización del gradiente:
+
+* **Para Regresión (`MSE`):** El compilador quema en C++ la resta directa proporcional al error cuadrado.
+* **Para Clasificación (`CrossEntropy`):** Aprovecha la cancelación algebraica entre Softmax y NLL, reduciendo el cálculo del gradiente de entropía a un simple `(prediccion - target)`.
+
+Esta simplificación extrema permite que la actualización de pesos en el silicio cueste apenas unos pocos ciclos de reloj, ejecutándose en fracciones de milisegundo.
+
+#### C. Captura del Estado Latente (Zero-Copy Pointer)
+
+Para que la capa `Linear` calcule su gradiente y ajuste sus pesos ($W = W - \alpha \times \text{Error} \times \text{Entrada}$), el motor SGD necesita conocer los valores de activación de la penúltima capa.
+
+En lugar de crear un buffer temporal gigantesco que duplique el consumo de SRAM para guardar este historial (como lo haría un framework de servidor), el C++ de MiniML inyecta un puntero constante de 32-bits (o 16-bits en AVR) llamado `latent_vector`. Durante el *Forward Pass*, este puntero simplemente "captura" la dirección de memoria del buffer estático anterior, otorgando acceso total al motor SGD con un costo físico de **apenas 2 a 4 bytes de RAM**.
+
+#### D. Límites Arquitectónicos y "Amnesia del Hardware"
+
+Esta característica de grado industrial exige responsabilidad total por parte del arquitecto del firmware:
+
+1. **Restricción Exclusiva a Capas `Linear`:** El transpilador bloqueará automáticamente cualquier intento de aplicar Transfer Learning a capas convolucionales o bloques residuales, forzándolos a la memoria Flash. Retropropagar el error a través de dimensiones espaciales exigiría matrices temporales de Im2Col que causarían un *Stack Overflow* garantizado en el hardware.
+2. **Impacto en SRAM:** Mover la última capa a la SRAM conlleva un costo. Una capa `Linear(64, 10)` consumirá $(64 \times 10 + 10) \times 4 \text{ bytes} = 2,600 \text{ bytes}$ de RAM dinámica, lo cual descarta inmediatamente a los microcontroladores de gama baja de 8-bits (ej. ATmega328P con 2KB de SRAM total). Este modo está diseñado para potenciar chips de 32-bits (ESP32, STM32, Cortex-M4).
+3. **Amnesia Volátil:** Dado que los pesos re-entrenados residen en la SRAM, **el aprendizaje se pierde instantáneamente si el dispositivo pierde energía**. Para hacer el aprendizaje permanente, el integrador debe diseñar una rutina en su código principal que extraiga los arreglos de C++ modificados y los guarde periódicamente en una partición no volátil externa (EEPROM o NVS). Se debe tener precaución de no guardar iterativamente en cada ciclo (Epoch) para no destruir físicamente los sectores de la memoria Flash por límite de ciclos de escritura.
+
 ---
 
 # Capítulo 7. CLI de MiniML (Interfaz de Línea de Comandos)
@@ -1598,6 +1639,7 @@ Es la herramienta de diagnóstico más crítica del framework. Realiza un análi
 * `--lang` *(Opcional)*: Lenguaje de transpilación. Opciones: `C`, `C++`, `Rust`. Por defecto: `C++`.
 * `--quantized` *(Flag Opcional)*: Si se incluye, el estimador calculará la huella de memoria asumiendo compresión de pesos a INT8.
 * `--input_shape` *(Opcional)*: Para redes convolucionales, define la forma del tensor de entrada separada por comas (ej. `1,28,28`).
+* `--on_device_learning` *(Opcional)*: Si se incluye, calculará el overhead moviendo la última capa a SRAM para Transfer Learning
 
 
 * **Funcionamiento Técnico:**

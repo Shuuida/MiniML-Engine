@@ -32,12 +32,14 @@ def _get_kernel_dims(kernel_size):
     k = int(kernel_size)
     return k, k
 
-def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
+def generate_cpp_code(model, input_shape, model_name="MiniMLModel", 
+                      on_device_learning=False, loss_type='MSE', learning_rate=0.01):
     """
     Genera una librería Single-Header (.h) en C++.
     Soporta:
     1. Modelos Float32 (Clases MiniTensor).
     2. Modelos INT8 (Diccionarios de Quantizer).
+    3. Transfer Learning Edge (SGD Estático) para capas Linear.
     """
     
     # Detección de modo: ¿Es un modelo normal o un diccionario cuantizado?
@@ -73,6 +75,12 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
     code.append(f"class {model_name} {{")
     code.append("public:")
     
+    # Puntero para Transfer Learning
+    if on_device_learning:
+        code.append("    // Puntero de captura para On-Device Transfer Learning")
+        code.append("    static const float* latent_vector;")
+        code.append("")
+    
     # Calcular tamaño de entrada plano
     input_flat_size = 1
     for dim in input_shape: input_flat_size *= dim
@@ -80,60 +88,52 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
     inference_body = []
     weight_definitions = [] # Almacenamos para escribir al final (static members)
     
+    trainable_layer_info = None # Metadatos para SGD
+    
     current_var = "input"
     current_shape = list(input_shape)
     current_flat_size = input_flat_size
     
     # PREPARAR ITERADOR DE CAPAS
-    # Si es cuantizado, el diccionario tiene claves "layer_0_Conv2d", etc.
-    # Si es float, iteramos model.layers
-    
     if is_quantized:
-        # Filtrar metadatos y ordenar por nombre (layer_0, layer_1...)
         layers_data = []
         for k, v in model.items():
             if k == "__metadata__": continue
-            # Extraer índice del nombre "layer_0_Type"
             try:
                 idx = int(k.split('_')[1])
                 layers_data.append((idx, k, v))
             except: continue
         layers_data.sort(key=lambda x: x[0])
-        iterator = [(item[0], item[2]) for item in layers_data] # (idx, data_dict)
+        iterator = [(item[0], item[2]) for item in layers_data]
     else:
-        # Modo Legacy Float
         iterator = enumerate(model.layers)
 
     # BUCLE DE GENERACIÓN
     for i, layer_obj in iterator:
         
-        # Unificar interfaz de acceso a datos
         if is_quantized:
             layer_type = layer_obj['type']
-            # En modo cuantizado, 'layer_obj' es el diccionario de datos
-            # Los pesos ya vienen aplanados o estructurados en listas
             data_src = layer_obj 
             layer_quantized = layer_obj.get('quantized', False)
+            is_trainable = False
         else:
             layer_type = layer_obj.__class__.__name__
-            # En modo float, 'layer_obj' es el objeto capa
             data_src = None
             layer_quantized = False
+            # Extraer bandera de entrenamiento
+            is_trainable = getattr(layer_obj, 'trainable', False)
 
         # > CAPA LINEAR
         if 'Linear' in layer_type:
             if is_quantized:
-                # Recuperar shape de los pesos originales (In, Out)
                 w_in = len(data_src['weights'])
                 w_out = len(data_src['weights'][0])
                 w_flat = _flatten(data_src['weights'])
                 b_flat = _flatten(data_src['bias']) if data_src['bias'] else [0.0] * w_out
-                
                 scales = data_src['scale']
                 zps = data_src['zero_point']
                 scheme = data_src['scheme']
             else:
-                # El Tensor original es (In, Out)
                 w_in, w_out = layer_obj.weights.shape
                 w_flat = _flatten(layer_obj.weights.data)
                 b_flat = _flatten(layer_obj.bias.data) if layer_obj.bias else [0.0] * w_out
@@ -141,25 +141,34 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             w_name = f"W_{i}"
             b_name = f"B_{i}"
             
-            # Definición de Arrays
-            if layer_quantized:
-                weight_definitions.append(f"    static const int8_t {w_name}[{len(w_flat)}] MINITENSOR_MEM;")
-                s_name = f"S_{i}"
-                z_name = f"Z_{i}"
-                weight_definitions.append(f"    static const float {s_name}[{len(scales)}] MINITENSOR_MEM;")
-                weight_definitions.append(f"    static const int8_t {z_name}[{len(zps)}] MINITENSOR_MEM;")
+            # Asignación de Memoria Física (SRAM vs ROM)
+            if on_device_learning and is_trainable:
+                weight_definitions.append(f"    static float {w_name}[{len(w_flat)}];")
+                weight_definitions.append(f"    static float {b_name}[{len(b_flat)}];")
+                trainable_layer_info = {
+                    'w_name': w_name, 'b_name': b_name, 'in_var': current_var, 
+                    'in_size': w_in, 'out_size': w_out
+                }
+                inference_body.append(f"        // --- Captura de Estado Latente ---")
+                inference_body.append(f"        latent_vector = {current_var};")
             else:
-                weight_definitions.append(f"    static const float {w_name}[{len(w_flat)}] MINITENSOR_MEM;")
-            
-            weight_definitions.append(f"    static const float {b_name}[{len(b_flat)}] MINITENSOR_MEM;")
+                if layer_quantized:
+                    weight_definitions.append(f"    static const int8_t {w_name}[{len(w_flat)}] MINITENSOR_MEM;")
+                    s_name, z_name = f"S_{i}", f"Z_{i}"
+                    weight_definitions.append(f"    static const float {s_name}[{len(scales)}] MINITENSOR_MEM;")
+                    weight_definitions.append(f"    static const int8_t {z_name}[{len(zps)}] MINITENSOR_MEM;")
+                else:
+                    weight_definitions.append(f"    static const float {w_name}[{len(w_flat)}] MINITENSOR_MEM;")
+                weight_definitions.append(f"    static const float {b_name}[{len(b_flat)}] MINITENSOR_MEM;")
 
             # Inferencia
             next_var = f"layer{i}_out"
-            inference_body.append(f"        // --- Linear ({w_in} -> {w_out}) [Quant: {layer_quantized}] ---")
+            mode_str = "Trainable SRAM" if (on_device_learning and is_trainable) else f"Quant: {layer_quantized}"
+            inference_body.append(f"        // --- Linear ({w_in} -> {w_out}) [{mode_str}] ---")
             inference_body.append(f"        static float {next_var}[{w_out}];")
             
             loop = f"""        for (int out_c = 0; out_c < {w_out}; out_c++) {{
-            float sum = READ_FLOAT(&{b_name}[out_c]);
+            float sum = {"" if (on_device_learning and is_trainable) else "READ_FLOAT(&"}{b_name}[out_c]{"" if (on_device_learning and is_trainable) else ")"};
             """
             
             if layer_quantized:
@@ -176,8 +185,12 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 sum += {current_var}[in_c] * w_val;
             }}"""
             else:
-                loop += f"""            for (int in_c = 0; in_c < {w_in}; in_c++) {{
-                // Acceso seguro: Fila (in_c) * Columnas Totales (w_out) + Columna Actual (out_c)
+                if on_device_learning and is_trainable:
+                    loop += f"""            for (int in_c = 0; in_c < {w_in}; in_c++) {{
+                sum += {current_var}[in_c] * {w_name}[in_c * {w_out} + out_c];
+            }}"""
+                else:
+                    loop += f"""            for (int in_c = 0; in_c < {w_in}; in_c++) {{
                 float w_val = READ_FLOAT(&{w_name}[in_c * {w_out} + out_c]);
                 sum += {current_var}[in_c] * w_val;
             }}"""
@@ -191,16 +204,18 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
 
         # > CAPA CONV2D
         elif 'Conv2d' in layer_type and 'Separable' not in layer_type:
+            if on_device_learning and is_trainable:
+                print(f"\n[ALERTA EDGE AI] La capa {layer_type} en el indice {i} tiene trainable=True.")
+                print(" -> El reentrenamiento (SGD) esta restringido a capas 'Linear'.")
+                print(" -> Forzando inmutabilidad en ROM (PROGMEM) para prevenir Stack Overflow.\n")
+
             if is_quantized:
                 out_ch = len(data_src['weights'])
                 in_ch = len(data_src['weights'][0])
-                
-                # Fix: Usar kernel_size del metadato (Seguro)
                 if 'kernel_size' in data_src:
                     ks = data_src['kernel_size']
                     kh, kw = _get_kernel_dims(ks)
                 else:
-                    # Fallback
                     kh = len(data_src['weights'][0][0])
                     kw = len(data_src['weights'][0][0][0])
                 
@@ -214,22 +229,17 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 padding = _get_val(data_src.get('padding', 1))
 
             else:
-                # Modo Float Legacy
                 out_ch = layer_obj.out_channels
                 in_ch = layer_obj.in_channels
                 kh, kw = _get_kernel_dims(layer_obj.kernel_size)
                 w_flat = _flatten(layer_obj.weights.data)
                 b_flat = _flatten(layer_obj.bias.data) if layer_obj.bias else [0.0] * out_ch
-                
                 stride = _get_val(layer_obj.stride)
                 padding = _get_val(layer_obj.padding)
 
             if len(current_shape) == 3:
-                # Caso: Entrada ya tiene forma (C, H, W)
                 in_c, in_h, in_w = current_shape
             else:
-                # Caso: Entrada plana (Flat). Inferimos geometría.
-                # Asumimos que in_c coincide con lo que esperan los pesos (in_ch)
                 in_c = in_ch
                 side = int(math.sqrt(current_flat_size / in_c))
                 in_h, in_w = side, side
@@ -248,7 +258,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 weight_definitions.append(f"    static const float {w_name}[{len(w_flat)}] MINITENSOR_MEM;")
             weight_definitions.append(f"    static const float {b_name}[{len(b_flat)}] MINITENSOR_MEM;")
 
-            # INFERENCIA
             next_var = f"layer{i}_out"
             inference_body.append(f"        static float {next_var}[{output_vol}];")
 
@@ -295,6 +304,11 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
 
         # > CAPA CONV1D
         elif 'Conv1d' in layer_type:
+            if on_device_learning and is_trainable:
+                print(f"\n[ALERTA EDGE AI] La capa {layer_type} en el indice {i} tiene trainable=True.")
+                print(" -> El reentrenamiento (SGD) esta restringido a capas 'Linear'.")
+                print(" -> Forzando inmutabilidad en ROM (PROGMEM) para prevenir Stack Overflow.\n")
+
             in_channels = current_shape[-2] if len(current_shape) >= 2 else 1
             in_len = current_shape[-1]
             
@@ -307,7 +321,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             else:
                 out_channels = layer_obj.internal.out_channels if hasattr(layer_obj, 'internal') else layer_obj.weights.shape[0]
                 
-                # Extracción segura del Kernel y Stride
                 raw_k = layer_obj.internal.kernel_size if hasattr(layer_obj, 'internal') else getattr(layer_obj, 'kernel_size', 1)
                 k_size = int(raw_k[1] if isinstance(raw_k, tuple) else raw_k)
                 
@@ -361,7 +374,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             inference_body.append(f"        // --- Sigmoid ---")
             inference_body.append(f"        for(int i=0; i<{current_flat_size}; i++) {{")
             inference_body.append(f"            float val = {current_var}[i];")
-            # Clip de seguridad idéntico al de Python para evitar Overflow en C++
             inference_body.append(f"            if(val > 100.0) val = 100.0;")
             inference_body.append(f"            if(val < -100.0) val = -100.0;")
             inference_body.append(f"            {current_var}[i] = 1.0 / (1.0 + exp(-val));")
@@ -374,11 +386,9 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
 
         # > CAPA MAXPOOL 1D
         elif 'MaxPool1d' in layer_type:
-            # La forma esperada en 1D es [Canales, Longitud]
             in_channels = current_shape[-2] if len(current_shape) >= 2 else 1
             in_len = current_shape[-1]
             
-            # Extraer hiperparámetros del JSON (por defecto kernel=2, stride=kernel)
             if is_quantized:
                 k_size = data_src.get('kernel_size', 2)
                 stride = data_src.get('stride', k_size)
@@ -386,7 +396,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 k_size = layer_obj.kernel_size
                 stride = layer_obj.stride
             
-            # Cálculo de la longitud de salida temporal
             out_len = (in_len - k_size) // stride + 1
             
             next_var = f"layer{i}_out"
@@ -395,11 +404,10 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             
             loop = f"""        for (int c = 0; c < {in_channels}; c++) {{
             for (int l = 0; l < {out_len}; l++) {{
-                float max_val = -999999.0f; // Evitar usar librerías externas para -Infinito
+                float max_val = -999999.0f;
                 for (int k = 0; k < {k_size}; k++) {{
                     int in_idx = l * {stride} + k;
                     if (in_idx < {in_len}) {{
-                        // Indexación plana 1D: Canal Actual * Longitud Total + Índice Actual
                         float val = {current_var}[c * {in_len} + in_idx];
                         if (val > max_val) max_val = val;
                     }}
@@ -409,17 +417,13 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
         }}"""
             inference_body.append(loop)
             
-            # Actualizar las variables de estado del generador
             current_var = next_var
             current_shape = [in_channels, out_len]
             current_flat_size = in_channels * out_len
 
         # > CAPA MAXPOOL
         elif 'MaxPool' in layer_type:
-            # Recuperar Hiperparámetros (Soporte Híbrido Dict/Objeto)
             if is_quantized:
-                # El Quantizer v3.0 estándar no guarda kernel/stride en capas sin pesos.
-                # Intentamos recuperarlo si existe, si no, aplicamos el estándar industrial 2x2.
                 k_val = data_src.get('kernel_size', 2) 
                 kh, kw = (k_val, k_val) if isinstance(k_val, int) else (k_val[0], k_val[1])
                 stride = data_src.get('stride', 2)
@@ -427,30 +431,24 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 kh, kw = _get_kernel_dims(layer_obj.kernel_size)
                 stride = layer_obj.stride if layer_obj.stride else kh
 
-            # Calcular Geometría de Entrada/Salida
-            # Asumimos que current_shape viene correctamente seteado como [C, H, W]
             if len(current_shape) == 3:
                 in_c, in_h, in_w = current_shape
             else:
-                # Fallback de emergencia si venimos de un Flatten lógico inverso
-                side = int(math.sqrt(current_flat_size / layer_obj.in_channels)) if not is_quantized else int(math.sqrt(current_flat_size)) # Riesgoso sin in_channels
+                side = int(math.sqrt(current_flat_size / layer_obj.in_channels)) if not is_quantized else int(math.sqrt(current_flat_size)) 
                 in_c, in_h, in_w = current_shape
 
             out_h = int((in_h - kh) / stride + 1)
             out_w = int((in_w - kw) / stride + 1)
             output_vol = in_c * out_h * out_w
 
-            # Definir Buffer Estático C++
             next_var = f"layer{i}_out"
             inference_body.append(f"        // --- MaxPool ({kh}x{kw}, stride={stride}) ---")
             inference_body.append(f"        static float {next_var}[{output_vol}];")
 
-            # Generar Algoritmo C++ Optimizado
-            # Usamos -FLT_MAX para inicializar, asegurando que funcione con valores negativos (ReLU leak o pre-activación)
             loop = f"""        for(int c=0; c<{in_c}; c++) {{
             for(int oy=0; oy<{out_h}; oy++) {{
                 for(int ox=0; ox<{out_w}; ox++) {{
-                    float max_val = -3.40282e+38; // -FLT_MAX aprox
+                    float max_val = -3.40282e+38; 
                     
                     int start_y = oy * {stride};
                     int start_x = ox * {stride};
@@ -460,7 +458,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                             int iy = start_y + ky;
                             int ix = start_x + kx;
                             
-                            // Boundary Check
                             if(iy < {in_h} && ix < {in_w}) {{
                                 int idx = (c * {in_h} * {in_w}) + (iy * {in_w}) + ix;
                                 float val = {current_var}[idx];
@@ -476,19 +473,21 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
         }}"""
             inference_body.append(loop)
 
-            # Actualizar Rastreo de Estado
             current_var = next_var
             current_shape = [in_c, out_h, out_w]
             current_flat_size = output_vol
-
-        # > CAPA SEPARABLE CONV 2D (MobileNet Style Edge AI)
+            
+        # > CAPA SEPARABLE CONV 2D
         elif 'SeparableConv2d' in layer_type:
-            # Dimensiones de entrada 2D [Canales, Alto, Ancho]
+            if on_device_learning and is_trainable:
+                print(f"\n[ALERTA EDGE AI] La capa {layer_type} en el indice {i} tiene trainable=True.")
+                print(" -> El reentrenamiento (SGD) esta restringido a capas 'Linear'.")
+                print(" -> Forzando inmutabilidad en ROM (PROGMEM) para prevenir Stack Overflow.\n")
+
             in_channels = current_shape[0] if len(current_shape) > 2 else 1
             in_h = current_shape[1] if len(current_shape) > 2 else current_shape[0]
             in_w = current_shape[2] if len(current_shape) > 2 else current_shape[1]
 
-            # Extracción dinámica y segura de las sub-capas
             dw = layer_obj.depthwise
             pw = layer_obj.pointwise
         
@@ -506,20 +505,17 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             else:
                 pad = (k_size - 1) // 2
             
-            # Matemáticas de reducción espacial
             out_h = (in_h + 2 * pad - k_size) // stride + 1
             out_w = (in_w + 2 * pad - k_size) // stride + 1
 
             wdw_name, bdw_name = f"W_dw_{i}", f"B_dw_{i}"
             wpw_name, bpw_name = f"W_pw_{i}", f"B_pw_{i}"
             
-            # Definiciones en Flash (PROGMEM)
             weight_definitions.append(f"    static const float {wdw_name}[{len(_flatten(dw.weights.data))}] MINITENSOR_MEM;")
             weight_definitions.append(f"    static const float {bdw_name}[{in_channels}] MINITENSOR_MEM;")
             weight_definitions.append(f"    static const float {wpw_name}[{len(_flatten(pw.weights.data))}] MINITENSOR_MEM;")
             weight_definitions.append(f"    static const float {bpw_name}[{out_channels}] MINITENSOR_MEM;")
 
-            # Arreglos de SRAM
             next_var = f"layer{i}_out"
             mid_var = f"layer{i}_mid"
 
@@ -527,7 +523,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             inference_body.append(f"        static float {mid_var}[{in_channels * out_h * out_w}];")
             inference_body.append(f"        static float {next_var}[{out_channels * out_h * out_w}];")
 
-            # Bucle C++ PROGMEM Safe
             loop = f"""
         // 1. Depthwise Spatial Convolution (Filtrado Espacial Per-Channel)
         for (int c = 0; c < {in_channels}; c++) {{
@@ -539,7 +534,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                             int in_y = y * {stride} - {pad} + ky;
                             int in_x = x * {stride} - {pad} + kx;
                             if (in_y >= 0 && in_y < {in_h} && in_x >= 0 && in_x < {in_w}) {{
-                                // Mapeo de tensores 4D a 1D contiguo
                                 int w_idx = c * ({k_size} * {k_size}) + ky * {k_size} + kx;
                                 int in_idx = c * ({in_h} * {in_w}) + in_y * {in_w} + in_x;
                                 sum += {current_var}[in_idx] * READ_FLOAT(&{wdw_name}[w_idx]);
@@ -573,10 +567,14 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
 
         # > BLOQUE RESIDUAL 1D
         elif 'ResidualBlock1D' in layer_type:
+            if on_device_learning and is_trainable:
+                print(f"\n[ALERTA EDGE AI] La capa {layer_type} en el indice {i} tiene trainable=True.")
+                print(" -> El reentrenamiento (SGD) esta restringido a capas 'Linear'.")
+                print(" -> Forzando inmutabilidad en ROM (PROGMEM) para prevenir Stack Overflow.\n")
+
             in_channels = current_shape[-2] if len(current_shape) >= 2 else 1
             in_len = current_shape[-1]
 
-            # [!] EXTRACCIÓN DINÁMICA
             c1 = layer_obj.conv1
             out_channels = c1.internal.out_channels if hasattr(c1, 'internal') else c1.weights.shape[0]
             stride = c1.internal.stride if hasattr(c1, 'internal') else 1
@@ -591,17 +589,13 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             else:
                 pad = (k_size - 1) // 2
             
-            # Cálculo matemático exacto de la salida
             out_len = (in_len + 2 * pad - k_size) // stride + 1
-
             has_shortcut = len(layer_obj.shortcut.layers) > 0
 
-            # Variables de C++
             w1_name, b1_name = f"W_res1_{i}", f"B_res1_{i}"
             w2_name, b2_name = f"W_res2_{i}", f"B_res2_{i}"
             ws_name, bs_name = f"W_ress_{i}", f"B_ress_{i}"
 
-            # Definiciones de Memoria Flash (PROGMEM)
             weight_definitions.append(f"    static const float {w1_name}[{len(_flatten(layer_obj.conv1.weights.data))}] MINITENSOR_MEM;")
             weight_definitions.append(f"    static const float {b1_name}[{out_channels}] MINITENSOR_MEM;")
             weight_definitions.append(f"    static const float {w2_name}[{len(_flatten(layer_obj.conv2.weights.data))}] MINITENSOR_MEM;")
@@ -610,7 +604,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 weight_definitions.append(f"    static const float {ws_name}[{len(_flatten(layer_obj.shortcut.layers[0].weights.data))}] MINITENSOR_MEM;")
                 weight_definitions.append(f"    static const float {bs_name}[{out_channels}] MINITENSOR_MEM;")
 
-            # Arreglos de SRAM
             next_var = f"layer{i}_out"
             tmp1_var = f"layer{i}_t1"
             tmp2_var = f"layer{i}_t2"
@@ -623,7 +616,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 inference_body.append(f"        static float {short_var}[{out_channels * out_len}];")
             inference_body.append(f"        static float {next_var}[{out_channels * out_len}];")
 
-            # C++ Code Loop (Operator Fusion) - PROGMEM & Dynamic Math Safe
             loop = f"""
         // 1. Conv1 + ReLU
         for (int out_c = 0; out_c < {out_channels}; out_c++) {{
@@ -631,14 +623,14 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 float sum = READ_FLOAT(&{b1_name}[out_c]);
                 for (int in_c = 0; in_c < {in_channels}; in_c++) {{
                     for (int k = 0; k < {k_size}; k++) {{
-                        int in_idx = l * {stride} - {pad} + k; // Dynamic Padding
+                        int in_idx = l * {stride} - {pad} + k; 
                         if (in_idx >= 0 && in_idx < {in_len}) {{
                             int w_idx = out_c * ({in_channels} * {k_size}) + in_c * {k_size} + k;
                             sum += {current_var}[in_c * {in_len} + in_idx] * READ_FLOAT(&{w1_name}[w_idx]);
                         }}
                     }}
                 }}
-                if (sum < 0.0f) sum = 0.0f; // ReLU
+                if (sum < 0.0f) sum = 0.0f; 
                 {tmp1_var}[out_c * {out_len} + l] = sum;
             }}
         }}
@@ -649,7 +641,7 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 float sum = READ_FLOAT(&{b2_name}[out_c]);
                 for (int in_c = 0; in_c < {out_channels}; in_c++) {{
                     for (int k = 0; k < {k_size}; k++) {{
-                        int in_idx = l * 1 - {pad} + k; // Stride=1, Dynamic Padding
+                        int in_idx = l * 1 - {pad} + k; 
                         if (in_idx >= 0 && in_idx < {out_len}) {{
                             int w_idx = out_c * ({out_channels} * {k_size}) + in_c * {k_size} + k;
                             sum += {tmp1_var}[in_c * {out_len} + in_idx] * READ_FLOAT(&{w2_name}[w_idx]);
@@ -667,7 +659,7 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             for (int l = 0; l < {out_len}; l++) {{
                 float sum = READ_FLOAT(&{bs_name}[out_c]);
                 for (int in_c = 0; in_c < {in_channels}; in_c++) {{
-                    int in_idx = l * {stride}; // Pad=0
+                    int in_idx = l * {stride}; 
                     if (in_idx < {in_len}) {{
                         int w_idx = out_c * {in_channels} + in_c;
                         sum += {current_var}[in_c * {in_len} + in_idx] * READ_FLOAT(&{ws_name}[w_idx]);
@@ -677,7 +669,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             }}
         }}
 """
-            
             loop += f"""
         // 4. Skip Connection + ReLU Final
         for (int out_c = 0; out_c < {out_channels}; out_c++) {{
@@ -697,10 +688,48 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
         }}
 """
             inference_body.append(loop)
-            
             current_var = next_var
             current_shape = [out_channels, out_len]
             current_flat_size = out_channels * out_len
+
+    # MOTOR SGD ESTÁTICO (Transfer Learning Edge)
+    retrain_body = []
+    if on_device_learning and trainable_layer_info:
+        w_n = trainable_layer_info['w_name']
+        b_n = trainable_layer_info['b_name']
+        o_sz = trainable_layer_info['out_size']
+        i_sz = trainable_layer_info['in_size']
+        
+        retrain_body.append(f"    // --- MiniML Edge AI: On-Device Transfer Learning ---")
+        retrain_body.append(f"    // Optimizado matematicamente desde Python para la capa {w_n}")
+        retrain_body.append(f"    void retrain_step(float* input, float* target) {{")
+        retrain_body.append(f"        float* pred = predict(input); // Forward Pass")
+        retrain_body.append(f"        float error[{o_sz}];")
+        
+        if loss_type == 'CrossEntropy':
+            retrain_body.append(f"        ")
+            retrain_body.append(f"        // Simplificacion Analitica: CrossEntropy + Softmax")
+            retrain_body.append(f"        for(int o = 0; o < {o_sz}; o++) {{")
+            retrain_body.append(f"            error[o] = pred[o] - target[o];")
+            retrain_body.append(f"        }}")
+        else:
+            retrain_body.append(f"        ")
+            retrain_body.append(f"        // Simplificacion Analitica: Mean Squared Error (MSE)")
+            retrain_body.append(f"        for(int o = 0; o < {o_sz}; o++) {{")
+            retrain_body.append(f"            error[o] = pred[o] - target[o];")
+            retrain_body.append(f"        }}")
+            
+        retrain_body.append(f"        ")
+        retrain_body.append(f"        // Descenso de Gradiente (SGD) en Memoria SRAM")
+        retrain_body.append(f"        for (int out_c = 0; out_c < {o_sz}; out_c++) {{")
+        retrain_body.append(f"            for (int in_c = 0; in_c < {i_sz}; in_c++) {{")
+        retrain_body.append(f"                int w_idx = in_c * {o_sz} + out_c;")
+        retrain_body.append(f"                // W = W - (alpha * error * input)")
+        retrain_body.append(f"                {w_n}[w_idx] -= {learning_rate}f * error[out_c] * latent_vector[in_c];")
+        retrain_body.append(f"            }}")
+        retrain_body.append(f"            {b_n}[out_c] -= {learning_rate}f * error[out_c];")
+        retrain_body.append(f"        }}")
+        retrain_body.append(f"    }}")
 
     # FINALIZAR CLASE
     code.extend(weight_definitions)
@@ -710,13 +739,21 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
     code.extend(inference_body)
     code.append(f"        return {current_var};")
     code.append(f"    }}")
+    
+    # Inyectar Retrain
+    if retrain_body:
+        code.append("")
+        code.extend(retrain_body)
+        
     code.append("};") # Fin Class
 
     # ESCRIBIR DEFINICIONES ESTÁTICAS AL FINAL (.cpp style inside .h for header-only)
     code.append("")
     code.append("// --- Definicion de Pesos Estaticos ---")
     
-    # Reiniciar iterador para escritura de datos
+    if on_device_learning:
+        code.append(f"const float* {model_name}::latent_vector = nullptr;")
+
     if is_quantized:
         iterator = [(item[0], item[2]) for item in layers_data]
     else:
@@ -727,9 +764,11 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
             layer_type = layer_obj['type']
             data_src = layer_obj
             layer_quantized = layer_obj.get('quantized', False)
+            is_trainable = False
         else:
             layer_type = layer_obj.__class__.__name__
             layer_quantized = False
+            is_trainable = getattr(layer_obj, 'trainable', False)
             
         if 'Linear' in layer_type or ('Conv2d' in layer_type and 'Separable' not in layer_type) or 'Conv1d' in layer_type or 'ResidualBlock1D' in layer_type or 'SeparableConv2d' in layer_type:
             # Refrescar los nombres en cada iteración
@@ -794,7 +833,6 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                 code.append(f"const float {model_name}::W_res2_{i}[] MINITENSOR_MEM = {{ {w2_str} }};")
                 code.append(f"const float {model_name}::B_res2_{i}[] MINITENSOR_MEM = {{ {b2_str} }};")
                 
-                # Escribir Shortcut (Si existe)
                 if len(layer_obj.shortcut.layers) > 0:
                     cs = layer_obj.shortcut.layers[0]
                     ws_flat = _flatten(cs.weights.data)
@@ -806,26 +844,27 @@ def generate_cpp_code(model, input_shape, model_name="MiniMLModel"):
                     
                 continue
 
-            if layer_quantized:
-                # Escribir array INT8
-                w_str = ", ".join(str(int(x)) for x in w_flat)
-                code.append(f"const int8_t {model_name}::{w_name}[] MINITENSOR_MEM = {{ {w_str} }};")
-                
-                # Escribir Scales/ZP
-                s_name = f"S_{i}"
-                z_name = f"Z_{i}"
-                s_str = ", ".join(f"{x:.8f}" for x in scales)
-                z_str = ", ".join(str(int(x)) for x in zps)
-                
-                code.append(f"const float {model_name}::{s_name}[] MINITENSOR_MEM = {{ {s_str} }};")
-                code.append(f"const int8_t {model_name}::{z_name}[] MINITENSOR_MEM = {{ {z_str} }};")
-            else:
+            # Separar inicializaciones Mutables (SRAM) vs Inmutables (PROGMEM)
+            if on_device_learning and is_trainable and 'Linear' in layer_type:
                 w_str = ", ".join(f"{x:.6f}" for x in w_flat)
-                code.append(f"const float {model_name}::{w_name}[] MINITENSOR_MEM = {{ {w_str} }};")
-
-            # Bias
-            b_str = ", ".join(f"{x:.6f}" for x in b_flat)
-            code.append(f"const float {model_name}::{b_name}[] MINITENSOR_MEM = {{ {b_str} }};")
+                b_str = ", ".join(f"{x:.6f}" for x in b_flat)
+                code.append(f"float {model_name}::{w_name}[] = {{ {w_str} }};")
+                code.append(f"float {model_name}::{b_name}[] = {{ {b_str} }};")
+            else:
+                if layer_quantized:
+                    w_str = ", ".join(str(int(x)) for x in w_flat)
+                    code.append(f"const int8_t {model_name}::{w_name}[] MINITENSOR_MEM = {{ {w_str} }};")
+                    
+                    s_str = ", ".join(f"{x:.8f}" for x in scales)
+                    z_str = ", ".join(str(int(x)) for x in zps)
+                    code.append(f"const float {model_name}::{s_name}[] MINITENSOR_MEM = {{ {s_str} }};")
+                    code.append(f"const int8_t {model_name}::{z_name}[] MINITENSOR_MEM = {{ {z_str} }};")
+                else:
+                    w_str = ", ".join(f"{x:.6f}" for x in w_flat)
+                    code.append(f"const float {model_name}::{w_name}[] MINITENSOR_MEM = {{ {w_str} }};")
+                
+                b_str = ", ".join(f"{x:.6f}" for x in b_flat)
+                code.append(f"const float {model_name}::{b_name}[] MINITENSOR_MEM = {{ {b_str} }};")
 
     code.append("")
     code.append(f"#endif // {guard}")

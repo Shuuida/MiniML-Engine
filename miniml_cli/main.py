@@ -67,7 +67,8 @@ def cmd_estimate(args):
         target_flash=args.flash,
         target_sram=args.sram,
         language=args.lang,
-        input_shape=shape_tuple
+        input_shape=shape_tuple,
+        on_device_learning=args.on_device_learning
     )
 
     print("\n" + "="*50)
@@ -212,6 +213,7 @@ def main():
     parser_estimate.add_argument("--lang", type=str, default="C++", choices=["C", "C++", "Rust"], help="Lenguaje destino")
     parser_estimate.add_argument("--quantized", action="store_true", help="Calcula asumiendo pesos INT8")
     parser_estimate.add_argument("--input_shape", type=str, help="Forma de entrada separada por comas (ej: 1,28,28)")
+    parser_estimate.add_argument("--on_device_learning", action="store_true", help="Calcula el overhead moviendo la última capa a SRAM para Transfer Learning")
 
     # Comando: sensor
     parser_sensor = subparsers.add_parser("sensor", help="Inicia recolección de datos desde Serial o Simulador")
